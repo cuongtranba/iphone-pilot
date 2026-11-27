@@ -12,9 +12,9 @@ paraphrasing.
 
 | Code | Meaning | Do this |
 |---|---|---|
-| `stale_ref` | The ref is not from the latest read, or its element moved or disappeared | `snapshot` (or `find`), then tap the new ref or tap by text |
-| `not_found` | No element's label or value contains that text | Snapshot and use the label as written. Try a shorter part of it. Scroll if it may be off screen. In ocr mode, the text may be misread or the control may be icon-only |
-| `ambiguous` | Several elements match. `candidates` lists them with refs | Choose by role, frame or value, then `tap {ref}`. Never guess when the candidates mean different actions |
+| `stale_ref` | The ref number is not in the latest read, or its element moved or disappeared since that read. An old ref number that *is* in the latest read is **not** refused: it names whatever element has that number now | `snapshot` (or `find`), then tap the new ref or tap by text |
+| `not_found` | No element's label or value contains that text | Snapshot and use the label as written. Try a shorter part of it. Scroll if it may be off screen. In ocr mode, the text may be misread or the control may be icon-only. On a Lock Screen snapshot, the phone has locked |
+| `ambiguous` | Several elements contain the text and none matches it exactly. `candidates` lists them with refs from the read just made | Choose by role, frame or value, then `tap {ref}`. Or repeat the tap with the full label exactly as shown (for example `Q Search`). Never guess when the candidates mean different actions |
 | `unknown_key` | `key` name is not supported | Use `return, escape, tab, delete, up, down, left, right, space` |
 
 ## ocr mode (iPhone Mirroring)
@@ -38,7 +38,7 @@ paraphrasing.
 | Code | Meaning | Do this |
 |---|---|---|
 | `iph_missing` | The `iph` CLI is not installed or not on PATH | Run `doctor` and pass on its `user_action` |
-| `iph_bad_output` | `iph` exited without JSON | Run `doctor`. The phone may be disconnected, locked or untrusted |
+| `iph_bad_output` | `iph` exited without JSON | Try one `snapshot`. If that fails too, the phone is probably disconnected, locked or untrusted, so run `doctor` (in iph mode it opens Settings) and pass on its `user_action` |
 | other codes | Passed through from `iph` itself | Follow `user_action` or `hint`. Run `doctor` if the cause is unclear |
 
 ## Readiness checks
