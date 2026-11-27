@@ -7,6 +7,7 @@ import { createPilot } from "../src/index.ts";
 const root = join(import.meta.dir, "..");
 const fakeBin = join(import.meta.dir, "fixtures", "bin");
 const settingsPng = join(import.meta.dir, "fixtures", "settings.png");
+const homePng = join(import.meta.dir, "fixtures", "home.png");
 const originalPath = process.env.PATH;
 
 let dir: string;
@@ -45,6 +46,16 @@ test("ocr snapshot of a saved Settings capture finds General inside the screen",
   expect(y).toBeGreaterThanOrEqual(0);
   expect(x + w).toBeLessThanOrEqual(snap.screen.w);
   expect(y + h).toBeLessThanOrEqual(snap.screen.h);
+});
+
+test("ocr snapshot of the Home Screen gives an app's name the frame of its icon, so tapping the name opens the app", async () => {
+  const snap = await createPilot({ mode: "ocr", image: homePng, stateDir: dir }).snapshot();
+  const settings = snap.elements.find((e) => e.label === "Settings")!;
+  expect(settings.role).toBe("app_icon");
+  // The icon sits above its label; on this capture the label's text starts at y≈511.
+  const { y, h } = settings.frame;
+  expect(y + h).toBeLessThanOrEqual(511);
+  expect(h).toBeGreaterThanOrEqual(40);
 });
 
 test("iph snapshot maps the accessibility tree into refs e1..eN in reading order", async () => {
