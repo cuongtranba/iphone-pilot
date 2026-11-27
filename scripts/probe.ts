@@ -270,6 +270,17 @@ function ocrFailureCases(): Case[] {
       },
     },
     {
+      name: "phone unlocked (mirror session ended): refused, doctor says how to reconnect",
+      manual: true,
+      run: async () => {
+        const o = await pilot.tap({ x: 150, y: 300 });
+        const snap = await pilot.snapshot().then(() => "read ok", (e) => `read refused: ${e.outcome?.error?.code}`);
+        const d = await pilot.doctor();
+        const c = d.modes.ocr.checks.find((x) => x.check === "phone connected");
+        return { pass: o.outcome === "not_sent" && o.error?.code === "mirror_disconnected" && c?.ok === false, detail: `${brief(o)}; ${snap}; doctor: ${c?.detail} -> ${c?.user_action}` };
+      },
+    },
+    {
       name: "iPhone Mirroring not running: refused, doctor says how to fix",
       manual: true,
       run: async () => {
@@ -343,7 +354,7 @@ const cell = (s: string) => s.replaceAll("|", "\\|").replaceAll("\n", " ");
 const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
 for (const r of results) rows.set(cell(r.name), `| ${cell(r.name)} | ${r.pass ? "PASS" : "FAIL"} | ${r.ms} | ${cell(r.detail)} | ${stamp} |`);
 const order = CASES.map((c) => cell(c.name));
-const body = [...rows.entries()].sort(([a], [b]) => order.indexOf(a) - order.indexOf(b)).map(([, l]) => l);
+const body = [...rows.entries()].filter(([name]) => order.includes(name)).sort(([a], [b]) => order.indexOf(a) - order.indexOf(b)).map(([, l]) => l);
 const block = [start, `## ${mode} mode`, "", "| case | result | ms | detail | run (UTC) |", "|---|---|---|---|---|", ...body, end].join("\n");
 text = section ? text.replace(section, block) : `${text.trimEnd()}\n\n${block}\n`;
 writeFileSync(doc, text);

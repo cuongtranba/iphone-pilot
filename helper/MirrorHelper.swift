@@ -62,22 +62,54 @@ func boundsOf(_ info: [String: Any]) -> CGRect {
     return r
 }
 
-/// The phone window: layer 0 and titled "iPhone Mirroring" (the app owns several other windows).
+/// The phone window: layer 0 and titled like the app (it owns several other windows, e.g. "Welcome to …").
 func findMirrorWindow() -> MirrorWindow? {
+    guard let app = mirrorApp() else { return nil }
+    let title = app.localizedName ?? mirrorOwner
     for info in windowInfos([.optionAll]) {
-        guard info[kCGWindowOwnerName as String] as? String == mirrorOwner,
+        guard (info[kCGWindowOwnerPID as String] as? Int) == Int(app.processIdentifier),
               (info[kCGWindowLayer as String] as? Int) == 0,
-              info[kCGWindowName as String] as? String == mirrorOwner,
-              let id = info[kCGWindowNumber as String] as? Int,
-              let pid = info[kCGWindowOwnerPID as String] as? Int else { continue }
+              info[kCGWindowName as String] as? String == title,
+              let id = info[kCGWindowNumber as String] as? Int else { continue }
         let on = (info[kCGWindowIsOnscreen as String] as? Bool) ?? false
-        return MirrorWindow(id: CGWindowID(id), pid: pid_t(pid), bounds: boundsOf(info), onScreen: on)
+        return MirrorWindow(id: CGWindowID(id), pid: app.processIdentifier, bounds: boundsOf(info), onScreen: on)
     }
     return nil
 }
 
 func mirrorApp() -> NSRunningApplication? {
-    NSWorkspace.shared.runningApplications.first { $0.localizedName == mirrorOwner }
+    NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.ScreenContinuity").first
+        ?? NSWorkspace.shared.runningApplications.first { $0.localizedName == mirrorOwner }
+}
+
+/// Whether the window shows the phone. While it streams, its accessibility content is an empty
+/// hosting view; when the session ended ("iPhone in Use", "iPhone is locked" …) it holds the app's
+/// own texts and a Connect button, and a click there would press that button, not the phone.
+/// Only texts decide: the hover toolbar adds buttons over a live stream.
+func mirrorStreaming(pid: pid_t) -> (streaming: Bool, message: String) {
+    let app = AXUIElementCreateApplication(pid)
+    var ref: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &ref) == .success,
+          let wins = ref as? [AXUIElement] else { return (true, "") }
+    let title = mirrorApp()?.localizedName ?? mirrorOwner
+    var texts: [String] = []
+    var buttons: [String] = []
+    func walk(_ el: AXUIElement, _ depth: Int) {
+        guard depth < 8 else { return }
+        for child in axChildren(el) {
+            let role = axString(child, kAXRoleAttribute)
+            if role == kAXStaticTextRole as String {
+                let t = axString(child, kAXValueAttribute).replacingOccurrences(of: "\n", with: " ")
+                if !t.trimmingCharacters(in: .whitespaces).isEmpty { texts.append(t) }
+            } else if role == kAXButtonRole as String {
+                let name = axString(child, kAXDescriptionAttribute)
+                if !name.isEmpty { buttons.append("[\(name)]") }
+            }
+            walk(child, depth + 1)
+        }
+    }
+    for w in wins where axString(w, kAXTitleAttribute) == title { walk(w, 0) }
+    return (texts.isEmpty, (texts + buttons).joined(separator: " "))
 }
 
 func isMinimized(pid: pid_t) -> Bool {
@@ -337,6 +369,12 @@ func refusalFor(point: CGPoint, win: MirrorWindow) -> Refusal {
                    userAction: "move or close the window covering iPhone Mirroring, then retry")
 }
 
+func disconnected(_ message: String) -> Refusal {
+    Refusal(code: "mirror_disconnected",
+            message: "iPhone Mirroring is not showing the phone" + (message.isEmpty ? "" : " (it says: \(message))"),
+            userAction: "lock the iPhone, then click Connect in the iPhone Mirroring window")
+}
+
 /// Runs `body` only once the invariant holds. `target` maps the live content rect to the global
 /// point that must be topmost-owned by the mirror (nil = window centre). Restores the previous app.
 func withMirror(target: ((CGRect, CGRect) -> CGPoint)? = nil, _ body: (_ win: MirrorWindow, _ content: CGRect) throws -> Void) -> JSON {
@@ -355,6 +393,10 @@ func withMirror(target: ((CGRect, CGRect) -> CGPoint)? = nil, _ body: (_ win: Mi
     if isMinimized(pid: win.pid) {
         return refusalJSON(Refusal(code: "mirror_hidden", message: "the iPhone Mirroring window is minimized",
                                    userAction: "un-minimize the iPhone Mirroring window"), restored: nil)
+    }
+    let status = mirrorStreaming(pid: win.pid)
+    if !status.streaming {
+        return refusalJSON(disconnected(status.message), restored: nil)
     }
 
     let previous = NSWorkspace.shared.frontmostApplication
@@ -697,8 +739,10 @@ case "perms":
 
 case "window":
     guard let w = findMirrorWindow() else { emit(["found": false, "running": mirrorApp() != nil]) }
+    let status = mirrorStreaming(pid: w.pid)
     emit(["found": true, "id": Int(w.id), "bounds": rectJSON(w.bounds), "on_screen": w.onScreen, "pid": Int(w.pid),
-          "frontmost": frontmostPid() == w.pid, "minimized": isMinimized(pid: w.pid)])
+          "frontmost": frontmostPid() == w.pid, "minimized": isMinimized(pid: w.pid),
+          "streaming": status.streaming, "message": status.message])
 
 case "capture":
     guard rest.count == 1 else { usage("capture <png>") }
@@ -709,7 +753,9 @@ case "capture":
     let scale = Double(img.cg.width) / Double(w.bounds.width)
     let px = contentPixelRect(img.cg)
     let content = CGRect(x: px.minX / scale, y: px.minY / scale, width: px.width / scale, height: px.height / scale)
-    emit(["ok": true, "path": rest[0], "window": ["id": Int(w.id), "bounds": rectJSON(w.bounds)], "content": rectJSON(content), "scale": scale])
+    let status = mirrorStreaming(pid: w.pid)
+    emit(["ok": true, "path": rest[0], "window": ["id": Int(w.id), "bounds": rectJSON(w.bounds)], "content": rectJSON(content), "scale": scale,
+          "streaming": status.streaming, "message": status.message])
 
 case "ocr":
     guard rest.count == 1 else { usage("ocr <png>") }

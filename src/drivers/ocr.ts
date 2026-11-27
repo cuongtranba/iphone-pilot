@@ -54,6 +54,10 @@ async function input(args: string[]): Promise<Outcome> {
   return "fail" in r ? r.fail : (r.json as Outcome);
 }
 
+const RECONNECT = "lock the iPhone, then click Connect in the iPhone Mirroring window";
+const disconnected = (message?: string) =>
+  notSent("mirror_disconnected", `iPhone Mirroring is not showing the phone${message ? ` (it says: ${message})` : ""}`, { user_action: RECONNECT });
+
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, "");
 
 export function createOcrDriver(opts: OcrOptions = {}): Driver {
@@ -89,6 +93,8 @@ export function createOcrDriver(opts: OcrOptions = {}): Driver {
         const e = c.json.error ?? {};
         throw new ReadError(notSent(e.code ?? "capture_failed", e.message ?? "capture failed", { user_action: e.user_action }));
       }
+      // The window then shows Mirroring's own screen ("iPhone in Use" …), not the phone.
+      if (c.json.streaming === false) throw new ReadError(disconnected(c.json.message));
       return await ocrFile(path);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -147,6 +153,8 @@ export function createOcrDriver(opts: OcrOptions = {}): Driver {
           ok: visible,
           ...(visible ? {} : { detail: win.minimized ? "minimized" : "not on screen", user_action: win.minimized ? "un-minimize the iPhone Mirroring window" : "show the iPhone Mirroring window (click its Dock icon)" }),
         });
+        const streaming = win.streaming !== false;
+        checks.push({ check: "phone connected", ok: streaming, ...(streaming ? {} : { detail: win.message, user_action: RECONNECT }) });
       }
       return { ready: checks.every((c) => c.ok), checks };
     },
