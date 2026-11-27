@@ -1,13 +1,193 @@
 # iphone-pilot
 
-Drive a real iPhone from a Mac by text, not screenshots.
+Drive a real iPhone from a Mac by **text, not screenshots**.
 
-`iphone-pilot` gives agents one set of commands and one JSON element model in two modes:
+An agent asks for the screen and gets a few kilobytes of JSON: what is written where, each item
+with a ref it can tap. On the Home Screen that is about 4 KB against a 228 KB PNG (56x smaller), and
+no guessing of coordinates from a picture.
 
-- **ocr**: Apple Vision text recognition on the iPhone Mirroring window. No phone setup.
-- **iph**: the real iOS accessibility tree through [`iphone-cli`](https://github.com/HyunSeob/iphone-cli).
+```console
+$ iphone-pilot snapshot
+{"mode":"ocr","screen":{"w":310,"h":674},"elements":[
+  {"ref":"e15","role":"app_icon","label":"FaceTime","frame":{"x":23.3,"y":223.5,"w":50.6,"h":49.2},"source":"ocr"},
+  {"ref":"e33","role":"app_icon","label":"Settings","frame":{"x":164.6,"y":454.2,"w":52.5,"h":52.3},"source":"ocr"},
+  …]}
+$ iphone-pilot tap Settings
+{"ok":true,"outcome":"done","screen_changed":true,"restored_front_app":"Dia"}
+```
 
-It ships as a CLI and as an MCP server. Work in progress.
+The same commands and the same element model work in two modes:
+
+| | **ocr** | **iph** |
+|---|---|---|
+| Reads | Apple Vision text recognition on the macOS **iPhone Mirroring** window | The real iOS accessibility tree through [`iphone-cli`](https://github.com/HyunSeob/iphone-cli) (`iph`) |
+| Phone setup | None (iPhone Mirroring set up once) | USB pairing (Trust), Developer Mode, **iOS 27 or later** |
+| Sees | Text on screen, app icons on the Home Screen | Every accessible element: buttons, switches, fields, icon-only controls |
+| Phone state | **Locked** (Mirroring ends when the phone is unlocked) | **Unlocked** |
+| Input | Mouse, wheel and paste into the mirror window | Apple's input service on the phone |
+
+Because Mirroring needs the phone locked and `iph` needs it unlocked, only one mode works at a time.
+`--mode auto` (the default) uses `iph` when it reports a ready phone, otherwise `ocr`.
+
+It ships as a CLI and as an MCP server.
+
+## Install
+
+Needs macOS 15 or later on a Mac that runs iPhone Mirroring, [Bun](https://bun.sh), and the Xcode
+Command Line Tools (`xcode-select --install`, for `swiftc`; Xcode itself is not needed).
+
+```sh
+git clone https://github.com/cuongtranba/iphone-pilot
+cd iphone-pilot
+bun install
+bun run build:helper      # builds bin/mirror-helper (Swift: capture, Vision OCR, input)
+bun link                  # optional: puts `iphone-pilot` on your PATH
+iphone-pilot doctor
+```
+
+### Permissions (ocr mode)
+
+In **System Settings → Privacy & Security**, allow the app that runs `iphone-pilot` (your terminal,
+or the agent host) under:
+
+- **Accessibility**: to send clicks and keys and to press the Mirroring menu items.
+- **Screen & System Audio Recording**: to capture the Mirroring window.
+
+Restart that app after granting. `iphone-pilot doctor` says which one is missing.
+
+### iph mode
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/HyunSeob/iphone-cli/main/install.sh | sh   # checksum-verified
+iph setup
+```
+
+Plug the phone in by USB, unlock it, tap **Trust**, then turn on **Settings → Privacy & Security →
+Developer Mode** (the phone restarts). `iph doctor` installs the developer disk image and checks the
+rest. Touch and typing need **iOS 27 or later**; `iphone-pilot doctor` lists each failing `iph` check
+with the action to take.
+
+## Commands
+
+```text
+iphone-pilot [--mode auto|ocr|iph] [--image file.png] <command>
+  doctor                      readiness of both modes, with the exact fix for each failed check
+  snapshot                    elements on screen as JSON (refs e1..eN)
+  find <text>                 elements whose label or value contains the text
+  tap <ref|text|x,y>          tap by ref from the last snapshot, by text, or at a point
+  type <text> [--submit]      type text into the focused field (Return after it with --submit)
+  key <name>                  return, escape, tab, delete, up, down, left, right, space
+  swipe <up|down|left|right>
+  scroll <up|down>
+  home                        go to the Home Screen
+  screenshot <file.png>       PNG fallback for screens text cannot describe
+  mcp                         stdio MCP server (mode fixed at start)
+```
+
+`--image capture.png` (ocr) reads a saved capture instead of the live window; input is then refused.
+
+### Elements
+
+```ts
+{ ref: "e12", role: "button" | "text" | "app_icon" | …, label: string, value?: string,
+  frame: { x, y, w, h }, source: "ax" | "ocr" }
+```
+
+- `frame` and tap points are in the coordinate space of that mode's `snapshot().screen` (ocr: points
+  of the phone picture inside the mirror window; iph: iOS points).
+- A ref is valid only for the latest snapshot. Every snapshot (and every tap or find by text, which
+  reads the screen) replaces the stored refs. They are kept in `~/Library/Caches/iphone-pilot`
+  (override with `IPHONE_PILOT_STATE_DIR`), so refs survive between CLI calls.
+- Before tapping a ref, the screen is read again: if that element is no longer where the snapshot saw
+  it, nothing is sent (`stale_ref`).
+- `tap <text>` taps a single match. No match is `not_found`, several are `ambiguous` with the
+  candidates; it never picks one for you.
+
+### Outcomes
+
+Every action returns `{ok, outcome, …}` with the same contract as `iph`:
+
+| `outcome` | Meaning | Exit code |
+|---|---|---|
+| `done` | Ran to the end (taps add `screen_changed`) | 0 |
+| `not_sent` | Nothing reached the phone. Safe to retry | 1 |
+| `unknown` | Input may have reached the phone. **Do not resend**; read the screen | 2 |
+
+A refused action has `error: {code, message, user_action?}`.
+
+## MCP
+
+```sh
+claude mcp add iphone-pilot -- bun /path/to/iphone-pilot/src/cli.ts --mode auto mcp
+```
+
+or in an MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "iphone-pilot": {
+      "command": "bun",
+      "args": ["/path/to/iphone-pilot/src/cli.ts", "--mode", "auto", "mcp"]
+    }
+  }
+}
+```
+
+Tools: `doctor`, `snapshot`, `find`, `tap` (`ref` | `text` | `x`,`y`), `type` (`text`, `submit`),
+`key` (`name`), `swipe` (`direction`), `scroll` (`direction`), `home`, `screenshot` (`path`). Each returns
+the same JSON as the CLI.
+
+## How ocr mode stays safe
+
+The previous approach (screenshots plus clicks) sent taps and typing into whatever window covered
+the mirror. Here, before **any** input the helper:
+
+1. refuses if Mirroring is not running, its window is minimized, or it is not showing the phone
+   (after the phone is unlocked, the window shows Mirroring's own "iPhone in Use … Connect" screen);
+2. brings iPhone Mirroring to the front and waits until it is frontmost **and** the topmost window at
+   the exact target point is the mirror; if not (an always-on-top window covers it), it sends nothing
+   and returns `not_sent` (`mirror_covered`);
+3. sends the input, then gives the front back to the app that had it and puts the pointer back.
+
+Text is never typed key by key: the phone reads key events through its own hardware-keyboard layout
+(a Vietnamese Telex layout turned `wifi` into `ưifi`). It is pasted instead (any language, emoji), and
+then looked for on screen; if it cannot be seen the result is `unknown`, never a retype. Your clipboard
+is put back 8 seconds later, or left alone if you copied something in between.
+
+## Limits of ocr mode
+
+- Only what is written is seen. Icon-only controls (a back chevron, a close ✕) have no text: use
+  `screenshot` and `tap x,y`, or iph mode. Home Screen app names are matched to the icon above them and
+  come back as `app_icon`, because the mirror takes a tap only on the icon.
+- The mirror ignores mouse drags. `swipe` and `scroll` use wheel events (about 100 points per step),
+  which scroll lists and turn Home Screen pages but cannot do edge gestures such as swipe-back.
+- OCR can misread small or decorated text (`Q Search` for the search field, a clock read as `12:281`).
+- `escape` on a hardware keyboard does not go back in iOS apps.
+
+## Probe results
+
+`bun run probe -- --mode ocr|iph` runs a live matrix on the phone (Settings and the Home Screen only)
+and records it in [docs/probe-results.md](docs/probe-results.md).
+
+## Development
+
+```sh
+bun test                 # behaviour through the public API: real Swift helper on PNG fixtures, a fake iph on PATH
+bunx tsc --noEmit
+bun run build:helper
+bun run probe -- --mode ocr
+```
+
+`MIRROR_HELPER_PASTE_BEFORE_MS`, `MIRROR_HELPER_PASTE_MS` and `MIRROR_HELPER_RESTORE_MS` tune the paste
+timings; `MIRROR_HELPER_UPSCALE` the OCR upscaling (2 by default); `IPHONE_PILOT_HELPER` points at another
+helper binary.
+
+## Credits
+
+- [`iphone-cli`](https://github.com/HyunSeob/iphone-cli) (MIT) does the iph mode; this project only calls it.
+- The iPhone Mirroring pitfalls documented by [mirroir-mcp](https://github.com/jfarcand/mirroir-mcp)
+  (Apache-2.0) saved time; no code was taken from it.
 
 ## License
 
