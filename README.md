@@ -27,9 +27,50 @@ The same commands and the same element model work in two modes:
 | Input | Mouse, wheel and paste into the mirror window | Apple's input service on the phone |
 
 Because Mirroring needs the phone locked and `iph` needs it unlocked, only one mode works at a time.
-`--mode auto` (the default) uses `iph` when it reports a ready phone, otherwise `ocr`.
+`--mode auto` (the default) picks one for you; see [How `auto` picks a mode](#how-auto-picks-a-mode).
 
 It ships as a CLI and as an MCP server.
+
+## Which mode to use
+
+**ocr is faster, iph is more accurate.** These timings are from the same iPhone 16 Pro (iOS 27.2.1, USB):
+
+| Speed | ocr | iph |
+|---|---|---|
+| `snapshot` of the Home Screen | **0.46 s** | 1.3–1.5 s |
+| `tap` (MCP, including the check that the screen changed) | **2.0 s** | 3.6 s |
+| Settings search: tap the field, type twice, Return | **16 s** | 31 s |
+
+Most of iph's time is the phone itself: after each request it waits about 1.1 s before sending the
+screen.
+
+| Accuracy | ocr | iph |
+|---|---|---|
+| Source | Text recognised in a picture; small or decorated text can be misread (`Q Search`, a clock as `12:281`) | The phone's own accessibility tree; labels are exact |
+| Icon-only controls (back, close ✕) | Not seen; use `screenshot` and `tap x,y` | Seen, with labels (a back button carries the previous page's title) |
+| State of a switch, value of a field | Not available | `value` (`"1"` / `"0"`, field text) |
+| Roles | `text`, `app_icon` | `button`, `switch`, `search_field`, `text_field`, `header`, … |
+| Typing | Pasted through Universal Clipboard; about 1 paste in 10 needs a repair (adds ~2 s) | Pasted by `iph` on the phone; it checks the field afterwards |
+
+Use **iph** when the phone can stay unlocked on USB and you need exact controls: icon-only buttons,
+switch states, a lot of typing. Use **ocr** when you want speed, cannot set the phone up (no USB, no
+Developer Mode, iOS older than 27), or the phone must stay locked; it is good for reading text and
+opening apps.
+
+## How `auto` picks a mode
+
+- `auto` uses **iph** when the `iph` command is installed and `iph devices` lists a phone with
+  `ready: true`; otherwise it uses **ocr**.
+- `ready` in `iph devices` means paired and reachable over USB or Wi-Fi. It **does not check whether
+  the phone is locked**, and `auto` does not look at the mirror. So a phone that auto-locked while
+  plugged in still gets iph, even when iPhone Mirroring has reconnected and ocr would work.
+- The **CLI** decides on every command. The **MCP server** decides on its first tool call and keeps
+  that mode until it is restarted.
+- `iphone-pilot doctor` shows both modes' readiness in `modes.ocr` and `modes.iph`; the iph checks
+  include `screen_unlocked`. Its `"mode"` field uses this full check, so it can differ from what a
+  command picks: with a locked phone on USB, `doctor` says `ocr` while commands still pick iph.
+- To be sure of the mode, pass it: `--mode iph` or `--mode ocr` (for MCP:
+  `… src/cli.ts --mode iph mcp`).
 
 ## Install
 
@@ -168,12 +209,42 @@ or left alone if you copied something in between.
 - OCR can misread small or decorated text (`Q Search` for the search field, a clock read as `12:281`).
 - `escape` on a hardware keyboard does not go back in iOS apps.
 
-## Notes on iph mode
+## iph mode, Auto-Lock and a locked phone
 
-- A locked phone is read as its Lock Screen, and `iph` sends input to that screen; it does not refuse
-  it. Check `doctor` (`screen_unlocked`) before driving the phone, and keep Auto-Lock off for long
-  sessions.
-- Icon-only controls have labels here (a back button is labelled with the previous page's title).
+iph works only while the phone is unlocked. With Auto-Lock on, the phone locks itself after its
+timeout (30 s to 5 min), often in the middle of an agent's work. This was measured with the phone
+locked and face down (so Face ID could not unlock it):
+
+| Command on a locked phone | What happens |
+|---|---|
+| `snapshot` | Returns the **Lock Screen** (date, time, notifications, Flashlight, Camera), not the app that was open |
+| `tap <text>` / `tap <ref>` for something in the app | Refused, `not_sent` (`not_found` / `stale_ref`); nothing is sent |
+| `tap x,y`, `swipe`, `scroll`, `key`, `home` | **Sent**: iph does not refuse input on a locked phone. It lands on the Lock Screen and wakes the phone; if someone is facing the phone, Face ID may unlock it. A tap on a Lock Screen control (Flashlight, Camera, a notification) triggers it |
+| `doctor` | `screen_unlocked` fails with "Unlock the phone." |
+
+Nothing is lost when the phone locks: pairing, Developer Mode and the developer disk image stay. After
+it is unlocked, commands work again.
+
+Recommendations for agent sessions:
+
+1. Before a session, set **Settings → Display & Brightness → Auto-Lock → Never**; set it back afterwards.
+2. Start with `iphone-pilot doctor` and continue only when `modes.iph.ready` is `true`.
+3. Prefer taps by text or ref over `tap x,y`: they read the screen first, so a Lock Screen makes them
+   fail safely instead of pressing something.
+4. If a snapshot unexpectedly shows the Lock Screen, stop and ask a person to unlock the phone. Do not
+   tap your way through it.
+5. Notification banners are not in the app's tree and take taps near the top of the screen. For long
+   unattended runs, `iph dnd on` (and `iph dnd off` afterwards) keeps most of them away.
+
+Unlocking the phone also ends iPhone Mirroring ("iPhone in Use"), so ocr stops working (its
+commands are refused with `mirror_disconnected`). Locking it again and clicking **Connect** in the
+Mirroring window brings ocr back.
+
+Other notes:
+
+- Icon-only controls have labels in iph (a back button is labelled with the previous page's title).
+- `iph doctor`'s own touch self-test scrolls Settings. It can fail when Settings is on a short page
+  (for example Auto-Lock); go back to the Settings root and run it again.
 
 ## Probe results
 
