@@ -179,6 +179,28 @@ Tools: `doctor`, `snapshot`, `find`, `tap` (`ref` | `text` | `x`,`y`), `type` (`
 `key` (`name`), `swipe` (`direction`), `scroll` (`direction`), `home`, `screenshot` (`path`). Each returns
 the same JSON as the CLI.
 
+### Skill
+
+The server also ships a skill, [`drive-iphone`](skills/drive-iphone/SKILL.md), through the MCP
+[Skills extension](https://modelcontextprotocol.io/extensions/skills/overview). It is the playbook for
+these tools: the read, act, read-again loop, when a retry is safe (`not_sent`) and when it is not
+(`unknown`), how to resolve `ambiguous` and `stale_ref`, the locked-phone rule, and asking before
+anything that cannot be undone. There is nothing extra to install. The host loads the skill from the
+server only when a task needs it, and it updates with the server.
+
+In Claude Code (v2.1.331 or later) it appears as `/iphone-pilot:drive-iphone` and in `/skills`. Hosts
+that support skills over MCP need protocol revision 2026-07-28, which the server speaks. Hosts that
+only speak the 2025 revisions still get every tool, but not the skill. The skill lives in
+[`skills/`](skills/). Each folder in it with a `SKILL.md` is served, and the server refuses to start
+if one is malformed.
+
+To check what a host will see:
+
+```sh
+npx @modelcontextprotocol/inspector --cli bun /path/to/iphone-pilot/src/cli.ts --mode auto mcp \
+  --method skills/list --verify
+```
+
 ## How ocr mode stays safe
 
 The previous approach (screenshots plus clicks) sent taps and typing into whatever window covered
