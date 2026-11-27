@@ -1,8 +1,14 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { join } from "node:path";
+import { McpServer } from "@modelcontextprotocol/server";
+import { loadSkills } from "@modelcontextprotocol/server/ext/skills/node";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
 import { type Args, type Command, run } from "./commands.ts";
 import type { Pilot } from "./pilot.ts";
+
+// Served through the MCP Skills extension, so a host gets the playbook for these tools from the
+// server itself and it always matches the installed version.
+const SKILLS_DIR = join(import.meta.dir, "..", "skills");
 
 const direction = z.enum(["up", "down", "left", "right"]);
 
@@ -24,19 +30,19 @@ const TOOLS: { name: Command; description: string; shape: z.ZodRawShape }[] = [
 ];
 
 export async function serve(pilot: Pilot): Promise<void> {
-  const server = new McpServer({ name: "iphone-pilot", version: "0.1.0" });
-  // The SDK's registerTool generics over zod shapes exceed tsc's instantiation depth for this
-  // table-driven registration, so it is called through a minimal structural signature.
-  const register = server.registerTool.bind(server) as unknown as (
-    name: string,
-    config: { description: string; inputSchema: z.ZodRawShape },
-    cb: (args: unknown) => Promise<{ content: { type: "text"; text: string }[] }>,
-  ) => unknown;
-  for (const t of TOOLS) {
-    register(t.name, { description: t.description, inputSchema: t.shape }, async (args) => {
-      const { result } = await run(pilot, t.name, args as Args);
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    });
-  }
-  await server.connect(new StdioServerTransport());
+  // strict: a skill the catalog would skip fails startup instead of silently disappearing.
+  const skills = await loadSkills(SKILLS_DIR, { strict: true });
+  // serveStdio picks the protocol era from the client's opening message: 2026-07-28 (needed for
+  // skills in hosts such as Claude Code) or a 2025 `initialize`, both from this one factory.
+  serveStdio(() => {
+    const server = new McpServer({ name: "iphone-pilot", version: "0.1.0" });
+    for (const t of TOOLS) {
+      server.registerTool(t.name, { description: t.description, inputSchema: z.object(t.shape) }, async (args: unknown) => {
+        const { result } = await run(pilot, t.name, args as Args);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      });
+    }
+    skills.attach(server);
+    return server;
+  });
 }
