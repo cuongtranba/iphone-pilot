@@ -42,7 +42,8 @@ function toOutcome(r: Run | "missing"): Outcome {
     const outcome = r.exit === 2 ? "unknown" : "not_sent";
     return { ok: false, outcome, error: { code: "iph_bad_output", message: `iph exited ${r.exit} without JSON` } };
   }
-  const { element: _e, screen_summary: _s, ...rest } = r.json;
+  // iph attaches the screen it re-read after the action (every element); an outcome stays small.
+  const { element: _e, screen_summary: _s, screen: _sc, apps: _a, elements: _el, count: _c, seq: _q, pass: _p, ...rest } = r.json;
   return rest as Outcome;
 }
 
@@ -60,12 +61,12 @@ export function createIphDriver(): Driver {
       if (d === "missing" || !d.json) {
         return { ready: false, checks: [{ check: "iph doctor", ok: false, detail: `iph doctor exited ${d === "missing" ? "?" : d.exit} without JSON`, user_action: "run: iph doctor" }] };
       }
-      const checks: Check[] = (d.json.checks ?? []).map((c: any) => ({
-        check: c.check,
-        ok: c.status === "ok",
-        ...(c.detail ? { detail: c.detail } : {}),
-        ...(c.status !== "ok" ? { user_action: c.user_action ?? "run: iph doctor" } : {}),
-      }));
+      // Only iph's required checks decide readiness; its advice (wifi, auto_lock) stays as detail.
+      const checks: Check[] = (d.json.checks ?? []).map((c: any) => {
+        const ok = c.status === "ok" || c.required === false;
+        const detail = [c.status !== "ok" ? c.status : "", c.detail ?? "", ok ? (c.user_action ?? "") : ""].filter(Boolean).join(": ");
+        return { check: c.check, ok, ...(detail ? { detail } : {}), ...(ok ? {} : { user_action: c.user_action ?? "run: iph doctor" }) };
+      });
       const ready = d.json.ready === true;
       if (!ready && !checks.some((c) => !c.ok)) {
         checks.push({ check: "iph ready", ok: false, user_action: "run: iph doctor" });

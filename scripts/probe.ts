@@ -53,10 +53,14 @@ async function until(pred: (s: Snapshot) => boolean, ms = 6000): Promise<Snapsho
   return s;
 }
 const has = (label: string) => (s: Snapshot) => s.elements.some((e) => e.label === label);
-const onHome = (s: Snapshot) => s.elements.some((e) => e.label === "Settings" && (e.role === "app_icon" || mode === "iph"));
+/** Several app names at once only happen on the Home Screen ("Settings" alone is also a page title). */
+const onHome = (s: Snapshot) => ["Settings", "Camera", "Photos", "Clock", "App Store", "Maps"].filter((l) => has(l)(s)).length >= 3;
 const inSettingsRoot = (s: Snapshot) => ["Airplane Mode", "Bluetooth", "General"].some((l) => s.elements.some((e) => e.label === l));
 /** Settings' search field sits at the bottom; OCR reads its magnifier as "Q". */
-const searchField = (s: Snapshot) => s.elements.find((e) => /(^|\s)search$/i.test(e.label) && e.frame.y > s.screen.h * 0.75);
+const searchField = (s: Snapshot) =>
+  s.elements.find((e) => (e.role === "search_field" || /(^|\s)search$/i.test(e.label)) && e.frame.y > s.screen.h * 0.75);
+/** iph: the back button is a button in the top-left corner, labelled with the previous page's title. */
+const backButton = (s: Snapshot) => s.elements.find((e) => e.role === "button" && e.frame.x < 60 && e.frame.y < 130);
 // Icon-only controls OCR cannot read, at their place on this phone (content points).
 const BACK = { x: 29, y: 65 };
 const CLOSE_SEARCH = { x: 269, y: 634 };
@@ -65,7 +69,7 @@ const CLOSE_SEARCH = { x: 269, y: 634 };
 async function leaveSearch(): Promise<void> {
   await pilot.key("escape");
   if (mode === "ocr") await pilot.tap(CLOSE_SEARCH);
-  else await pilot.tap("Close");
+  else await pilot.tap("close");
 }
 
 /** Settings root scrolled so "General" shows; starts from the Home Screen. */
@@ -77,8 +81,10 @@ async function openSettingsRoot(): Promise<Snapshot> {
   let s = await until((x) => !onHome(x));
   // Settings reopens where it was left: in search mode, or on a sub-page (walk back).
   for (let i = 0; i < 6 && !inSettingsRoot(s); i++) {
+    const back = backButton(s);
     if (searchField(s) && s.elements.length < 8) await leaveSearch();
-    else await pilot.tap(mode === "ocr" ? BACK : "Back");
+    else if (mode === "ocr") await pilot.tap(BACK);
+    else if (back) await pilot.tap(back.ref);
     s = await pilot.snapshot();
   }
   for (let i = 0; i < 4 && !has("General")(s); i++) {
@@ -150,11 +156,12 @@ const CASES: Case[] = [
       const ascii = await pilot.type("wifi");
       const vi = await pilot.type(" Tiếng Việt", { submit: true });
       const s = await pilot.snapshot();
-      const shown = s.elements.some((e) => e.label.includes("wifi Tiếng Việt"));
+      const shown = s.elements.some((e) => `${e.label} ${e.value ?? ""}`.includes("wifi Tiếng Việt"));
+      const seen = s.elements.filter((e) => /wifi|ti[eế]ng|vi[eệ]t/i.test(`${e.label} ${e.value ?? ""}`)).map((e) => e.label).join(" / ");
       await leaveSearch();
       return {
         pass: tap.outcome === "done" && ascii.ok && vi.ok && shown,
-        detail: `tap ${brief(tap)}; "wifi" ${brief(ascii)}; " Tiếng Việt"+submit ${brief(vi)}; on screen: ${shown}`,
+        detail: `tap ${brief(tap)}; "wifi" ${brief(ascii)}; " Tiếng Việt"+submit ${brief(vi)}; on screen: ${shown} (${seen})`,
       };
     },
   },
@@ -313,12 +320,20 @@ function iphFailureCases(): Case[] {
       },
     },
     {
-      name: "phone locked: refused (not_sent) with a user action",
+      // Run with the phone locked and face down (Face ID would unlock it). iph has no lock refusal of
+      // its own: a locked phone reads as its Lock Screen, and input reaches that screen.
+      name: "phone locked: snapshot is the Lock Screen, app taps refused, doctor says unlock",
       manual: true,
       run: async () => {
-        const o = await pilot.tap({ x: 200, y: 400 });
-        const snap = await pilot.snapshot().then(() => "read ok", (e) => `read refused: ${JSON.stringify(e.outcome?.error)}`);
-        return { pass: o.outcome === "not_sent", detail: `${brief(o)} ${JSON.stringify(o.error)}; ${snap}` };
+        const s = await pilot.snapshot();
+        const o = await pilot.tap("Settings");
+        const d = await pilot.doctor();
+        const lock = d.modes.iph.checks.find((c) => c.check === "screen_unlocked");
+        const lockScreen = s.elements.some((e) => e.label === "Flashlight") && !onHome(s);
+        return {
+          pass: lockScreen && o.outcome === "not_sent" && lock?.ok === false,
+          detail: `snapshot: ${s.elements.map((e) => e.label.split(",")[0]).join(" / ")}; tap Settings ${brief(o)}; doctor screen_unlocked: ${lock?.detail} -> ${lock?.user_action}`,
+        };
       },
     },
   ];

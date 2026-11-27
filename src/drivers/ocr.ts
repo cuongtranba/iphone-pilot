@@ -201,35 +201,63 @@ export function createOcrDriver(opts: OcrOptions = {}): Driver {
       return clickAndObserve(x, y, lastLines);
     },
 
+    // Text is pasted through Universal Clipboard, and about one paste in ten inserts the phone's
+    // previous clipboard item instead of the new one (measured live). So a paste is checked on
+    // screen: nothing inserted → paste again; something else inserted → undo it (Cmd+Z) and paste
+    // again, but only when the undo provably restored the screen. Anything else is `unknown`.
     async type(text, { submit }) {
       if (opts.image) return readOnly();
-      const sent = await input(["type", text]);
-      if (sent.outcome !== "done") return sent;
       const want = norm(text);
-      let seen = want === "";
-      for (let i = 0; i < 3 && !seen; i++) {
-        try {
-          await read();
-        } catch {
-          break;
+      const count = () => (want === "" ? 0 : norm(lastLines.map((l) => l.text).join(" ")).split(want).length - 1);
+      const unverified = (sent: Outcome, attempts: number): Outcome => ({
+        ...sent,
+        ok: false,
+        outcome: "unknown",
+        attempts,
+        error: {
+          code: "type_not_verified",
+          message: "the text was sent but could not be seen on screen afterwards",
+          hint: "check the screen; do not retype, it may already be entered",
+        },
+      });
+      try {
+        await read();
+      } catch (e) {
+        if (e instanceof ReadError) return e.outcome;
+        throw e;
+      }
+      const before = body(lastLines);
+      const had = count();
+      const ATTEMPTS = 3;
+      for (let attempt = 1; ; attempt++) {
+        const sent = await input(["type", text]);
+        if (sent.outcome !== "done") return attempt === 1 ? sent : { ...sent, outcome: "unknown", ok: false };
+        let seen = want === "";
+        for (let i = 0; i < 3 && !seen; i++) {
+          try {
+            await read();
+          } catch {
+            return unverified(sent, attempt);
+          }
+          seen = count() > had;
         }
-        seen = norm(lastLines.map((l) => l.text).join(" ")).includes(want);
+        if (seen) {
+          if (!submit) return { ...sent, verified: true, ...(attempt > 1 ? { attempts: attempt } : {}) };
+          const enter = await input(["key", "return"]);
+          return { ...enter, verified: true, ...(attempt > 1 ? { attempts: attempt } : {}) };
+        }
+        if (attempt === ATTEMPTS) return unverified(sent, attempt);
+        if (differs(before, body(lastLines))) {
+          const undo = await input(["key", "cmd+z"]);
+          if (undo.outcome !== "done") return unverified(sent, attempt);
+          try {
+            await read();
+          } catch {
+            return unverified(sent, attempt);
+          }
+          if (differs(before, body(lastLines))) return unverified(sent, attempt);
+        }
       }
-      if (!seen) {
-        return {
-          ...sent,
-          ok: false,
-          outcome: "unknown",
-          error: {
-            code: "type_not_verified",
-            message: "the text was sent but could not be seen on screen afterwards",
-            hint: "check the screen; do not retype, it may already be entered",
-          },
-        };
-      }
-      if (!submit) return { ...sent, verified: true };
-      const enter = await input(["key", "return"]);
-      return { ...enter, verified: true };
     },
 
     async key(name) {

@@ -842,8 +842,10 @@ case "restore-pasteboard":
     exit(0)
 
 case "key":
-    guard rest.count == 1, let code = keyCodes[rest[0]] else { usage("key return|escape|tab|delete|up|down|left|right|space") }
-    emit(withMirror { _, _ in postKey(code) })
+    // "cmd+z" (undo) is used by iphone-pilot itself to take back a paste that inserted stale text.
+    let undo = rest.first == "cmd+z"
+    guard rest.count == 1, let code = undo ? CGKeyCode(6) : keyCodes[rest[0]] else { usage("key return|escape|tab|delete|up|down|left|right|space|cmd+z") }
+    emit(withMirror { _, _ in postKey(code, flags: undo ? .maskCommand : []) })
 
 default:
     usage("unknown subcommand \(cmd)")

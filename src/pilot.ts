@@ -120,7 +120,12 @@ export function createPilot(opts: PilotOptions = {}): Pilot {
             user_action: "run snapshot again and use a ref from its output",
           });
         }
-        return d.tapElement(forDriver(el, stored.native), { fresh: false });
+        const out = await d.tapElement(forDriver(el, stored.native), { fresh: false });
+        // iph says not_found for an element that went away; both modes call that a stale ref.
+        if (out.outcome === "not_sent" && out.error?.code === "not_found") {
+          return notSent("stale_ref", `ref ${target} ("${el.label}") is no longer on screen`, { user_action: "run snapshot again and use a fresh ref" });
+        }
+        return out;
       }
 
       let read_: Stored;

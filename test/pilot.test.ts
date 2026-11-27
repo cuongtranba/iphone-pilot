@@ -72,10 +72,15 @@ test("tapping a ref from an earlier snapshot taps that element and reports scree
   expect(out).toMatchObject({ ok: true, outcome: "done", screen_changed: true });
 });
 
-test("an element that disappeared makes iph's not_found come back as not_sent", async () => {
+test("an iph action outcome leaves out the screen iph re-read, so it stays small", async () => {
+  const out = await iph().tap({ x: 100, y: 200 });
+  expect(Object.keys(out).filter((k) => ["elements", "screen", "apps"].includes(k))).toEqual([]);
+});
+
+test("a ref whose element disappeared is refused as stale_ref, as in ocr mode", async () => {
   await iph().snapshot();
   const out = await iph().tap("e5");
-  expect(out).toMatchObject({ ok: false, outcome: "not_sent", error: { code: "not_found" } });
+  expect(out).toMatchObject({ ok: false, outcome: "not_sent", error: { code: "stale_ref" } });
 });
 
 test("without iph on PATH every command is not_sent iph_missing with the install action", async () => {

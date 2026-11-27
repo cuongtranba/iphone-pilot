@@ -42,7 +42,8 @@ switch (cmd) {
   case "tap": {
     const sel = rest[0] ?? "";
     if (sel.startsWith("id=") && !KNOWN_IDS.has(sel.slice(3))) notSent("not_found", `no element matches ${sel}`);
-    done({ verified: true, screen_changed: true });
+    // Like the real iph 0.1.10: a tap result carries the screen it read afterwards.
+    done({ verified: true, screen_changed: true, screen: { width: 402, height: 874 }, apps: [{ pid: 77, name: "Settings" }], count: ELEMENTS.length, seq: 2, elements: ELEMENTS });
   }
   case "type":
   case "key":
