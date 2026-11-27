@@ -1,0 +1,56 @@
+#!/usr/bin/env bun
+// Deterministic stand-in for `iph` (iphone-cli): prints recorded-shape JSON chosen by argv and
+// appends every invocation to $FAKE_IPH_LOG, so tests can see which commands were run.
+import { appendFileSync } from "node:fs";
+
+const argv = process.argv.slice(2);
+if (process.env.FAKE_IPH_LOG) appendFileSync(process.env.FAKE_IPH_LOG, JSON.stringify(argv) + "\n");
+
+const [cmd, ...rest] = argv;
+const print = (obj: unknown, code = 0): never => {
+  console.log(JSON.stringify(obj));
+  process.exit(code);
+};
+const f = (x: number, y: number, w: number, h: number) => ({ x, y, w, h });
+const el = (id: string, role: string, label: string | undefined, frame: object | undefined, extra: object = {}) => ({
+  id, role, ...(label ? { label } : {}), ...(frame ? { frame } : {}), traits: [], enabled: true, depth: 1, pid: 77, on_screen: true, ...extra,
+});
+
+const ELEMENTS = [
+  el("00000001", "application", "Settings", f(0, 0, 402, 874)),
+  el("c0ffee02", "button", "General", f(16, 400, 370, 44)),
+  el("c0ffee03", "header", "Settings", f(16, 60, 200, 40)),
+  el("c0ffee04", "switch", "Airplane Mode", f(16, 160, 370, 44), { value: "0" }),
+  el("c0ffee05", "button", "Wi-Fi", f(16, 220, 370, 44), { value: "Home" }),
+  el("gone0000", "button", "Vanishing", f(16, 500, 370, 44)),
+  el("c0ffee07", "button", "Offscreen", f(16, 2000, 370, 44), { on_screen: false }),
+  el("c0ffee08", "other", "Frameless", undefined),
+];
+const KNOWN_IDS = new Set(ELEMENTS.map((e) => e.id).filter((id) => id !== "gone0000"));
+
+const notSent = (code: string, message: string) =>
+  print({ ok: false, outcome: "not_sent", elapsed_ms: 5, error: { code, message, hint: "fake hint" } }, 1);
+const done = (extra: object = {}) => print({ ok: true, outcome: "done", elapsed_ms: 5, sent: true, ...extra });
+
+switch (cmd) {
+  case "devices":
+    print({ count: 1, selected: "FAKE-UDID", devices: [{ udid: "FAKE-UDID", connection: "usb", ios_version: "26.0", model: "iPhone", paired: true, ready: true, state: "ready" }], discovery_error: null });
+  case "doctor":
+    print({ ready: true, udid: "FAKE-UDID", connection: "usb", failing: [], checks: [{ check: "device", required: true, status: "ok" }] });
+  case "read":
+    print({ ok: true, outcome: "done", screen: { width: 402, height: 874 }, apps: [{ pid: 77, name: "Settings" }], count: ELEMENTS.length, pass: 1, seq: 1, elements: ELEMENTS });
+  case "tap": {
+    const sel = rest[0] ?? "";
+    if (sel.startsWith("id=") && !KNOWN_IDS.has(sel.slice(3))) notSent("not_found", `no element matches ${sel}`);
+    done({ verified: true, screen_changed: true });
+  }
+  case "type":
+  case "key":
+  case "swipe":
+  case "scroll":
+  case "button":
+  case "screenshot":
+    done();
+  default:
+    notSent("unknown_command", `fake iph does not know ${cmd}`);
+}
