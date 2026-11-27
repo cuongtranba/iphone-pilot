@@ -1,126 +1,170 @@
 ---
 name: drive-iphone
-description: How to operate a real iPhone through the iphone-pilot tools (doctor, snapshot, find, tap, type, key, swipe, scroll, home, screenshot) safely and without wasted calls. Use it whenever a task means doing something on the user's phone, such as opening an app, changing a setting, reading what is on screen, filling a field, or navigating iOS, and also when an iphone-pilot tool returned not_sent, unknown, stale_ref, ambiguous, mirror_* or a Lock Screen and you need to know what to do next.
+description: How to operate a real iPhone through the iphone-pilot tools (doctor, snapshot, find, tap, type, key, swipe, scroll, home, screenshot) safely and without wasted calls. Use it whenever a task means doing something on the user's phone, such as opening or installing an app, playtesting an app, changing a setting, reading what is on screen, filling a field, or navigating iOS. Prefer it over screenshot-and-click desktop automation of the iPhone Mirroring window. Also use it when an iphone-pilot tool returned not_sent, unknown, stale_ref, not_found, ambiguous, mirror_* or a Lock Screen and you need to know what to do next.
 ---
 
 # Driving an iPhone with iphone-pilot
 
-The tools act on a real phone in someone's hand or on their desk, not a simulator. Every tap can
-send a message, buy something or change a setting, and you only see the phone through text. So
-the job is: **read the screen, act once, read again**, and stop as soon as reality does not match
-what you expected.
+These tools act on a real phone that belongs to the user. It holds their messages, accounts and
+payment methods, and you only see it through text. Every tap can send, buy or change something
+for real. The tools exist because screenshot-and-guess control was slow, costly (an image per
+step, 0.7 to 5 MB, against about 3 KB of JSON) and sent clicks into the wrong window. So the job
+is: **read the screen as text, act once, read again**, and stop as soon as the screen does not
+match what you expected.
+
+## Start: one `doctor`, before anything else
+
+`doctor` reports both modes: `ocr` (text read from the iPhone Mirroring window) and `iph` (the
+iOS accessibility tree over USB). Each failed check comes with a `user_action`, which is the
+exact fix.
+
+- If the mode you need is not ready, give the user its failed checks' `user_action` lines word for
+  word and stop. Do not work around a missing permission or setting.
+- Run it **at the start**, before the task. It is slower than a snapshot. In iph mode it opens
+  Settings to test the phone and then reopens the app that was in front, so it leaves the phone
+  where it was. Mid-task, work out the problem from the error code and a `snapshot` first.
+- The two modes normally exclude each other. ocr needs the phone **locked** with Mirroring
+  connected. iph needs it **unlocked** on USB, and unlocking the phone ends Mirroring. So usually
+  only one mode is ready, and that is expected.
+- With `--mode auto`, the mode is re-chosen on every command: ocr while Mirroring shows the phone,
+  otherwise iph if a phone is ready on USB. It can therefore change mid-task when the phone is locked
+  or unlocked. The `mode` field of each `snapshot` or `find` tells you which mode you are in, and
+  doctor's `mode` is the same pick.
 
 ## The loop
 
-1. **`doctor` once at the start.** It reports both modes (`ocr` over iPhone Mirroring, `iph` over
-   the iOS accessibility tree). For each failed check it gives a `user_action` (an exact fix).
-   If neither mode is ready, pass that `user_action` to the user word for word and stop. Do not
-   try to work around a missing permission.
-2. **`snapshot`** to see the screen. You get `{mode, screen:{w,h}, elements:[{ref, role, label,
-   value?, frame, source}]}`. Note `mode`: the server fixed it on its first command and keeps it
-   for the whole session.
-3. **Act with one tool call**, then judge the result by `outcome` (see below). Do not chain several
-   blind actions. Each one changes the screen the next one depends on.
-4. **Check that you got where you meant to go.** A tap returns `screen_changed`. `true` means
-   something moved, not that it was the right thing. Take a new `snapshot` before you decide the
-   next step.
+1. **`snapshot`** to see the screen: `{mode, screen:{w,h}, elements:[{ref, role, label, value?,
+   frame, source}]}`. Use `find {text}` instead when you only need one element. It is cheaper and
+   returns only the matches.
+2. **One action**, then judge it by `outcome` (see below). Do not chain several blind actions,
+   because each one changes the screen the next one depends on.
+3. **Read again** before deciding the next step. A tap returns `screen_changed`: `false` means it
+   probably hit nothing, and `true` means something changed, which is not proof it was the right
+   thing. If a read looks half-changed (a title moved but the content did not), the screen was
+   mid-animation, so read once more.
 
-`find {text}` is a cheaper snapshot when you only need one element. It returns the matching
-elements and also replaces the stored refs.
+Apps reopen where they were left: deep in a page, in search mode, or with a sheet open. After you
+open an app, read the screen before you assume where you are. `home` is the reliable way back to a
+known state.
+
+## Refs: always from your latest read
+
+Every `snapshot`, `find` and text `tap` (which reads the screen first) is a new read. In each read,
+an element that is still there, with the same label and role in the same place, keeps its ref. Every
+other element gets a new number, and numbers are never reused. So a ref from an earlier read either
+still means the same element or is refused as `stale_ref`. It never silently taps something else.
+Refs are not always `e1..eN` in order.
+
+- Prefer the ref from the read you just made. If you get `stale_ref`, the element moved, changed or
+  disappeared, or the mode changed since that read. Read again and use the new ref.
+- The refs in an `ambiguous` result's `candidates` come from the read that tap just made, so they
+  are current.
 
 ## Choosing how to tap
 
-Prefer, in this order:
+1. **`tap {text}`** taps only if there is exactly one match. A case-insensitive *exact* label wins.
+   Otherwise any label or value that *contains* the text matches. So write the label exactly as
+   the snapshot shows it (ocr may read a search field as `Q Search`). A short word like "Search" or
+   "Get" also matches longer texts that contain it. No match gives `not_found`, and several give
+   `ambiguous`. Nothing is sent in either case.
+2. **`tap {ref}`** resolves `ambiguous`: pick the candidate whose role, value or frame fits (a
+   `switch` rather than a `heading`, the field rather than the sentence) and tap its ref.
+3. **`tap {x, y}`** only for controls with no text (icon-only buttons in ocr mode). Points are in
+   the snapshot's `screen` coordinates. Derive them from nearby element frames (a frame's centre
+   is `x + w/2, y + h/2`). Use `screenshot` only to see where the control sits relative to those
+   frames, never as a pixel ruler ([references/modes.md](references/modes.md)). A point tap is sent
+   even if the screen changed underneath it, so read right before it.
 
-1. **`tap {text: "Wi-Fi"}`**. It reads the screen first and taps only if there is exactly one
-   match. No match gives `not_found` and several give `ambiguous` with `candidates`. Nothing is
-   sent in either case.
-2. **`tap {ref: "e7"}`** from the *latest* snapshot or find. This is the way to resolve an
-   `ambiguous` result: pick the candidate whose frame or role fits and tap its ref.
-3. **`tap {x, y}`** only when the control has no text (an icon-only button in ocr mode). Points are
-   in the snapshot's `screen` coordinates. Derive them from element frames (a frame's centre is
-   `x + w/2, y + h/2`), and use a `screenshot` only to see where the control sits relative to those
-   frames (see [references/modes.md](references/modes.md)). A point tap is sent even if the screen
-   changed underneath it, so snapshot right before it.
+A `text` value shaped like a ref (`e12`) is read as a ref.
 
-Refs live only until the next `snapshot`, `find` or text tap, because each of those replaces
-them. A ref from two reads ago is gone and is refused as `stale_ref`. A `text` value shaped like a
-ref (`e12`) is read as a ref, so to tap a label that really is "e12", find it and tap its ref.
-
-## Reading outcomes: this decides whether you may retry
+## Reading outcomes decides whether you may retry
 
 Every action returns `{ok, outcome, screen_changed?, error?: {code, message, hint?, user_action?,
-candidates?}}`. Decide by `outcome` first and use `code` only to choose the fix:
+candidates?}}`. Decide by `outcome` first, then use `code` and `hint` to choose the fix:
 
 | `outcome` | What it means | What you do |
 |---|---|---|
-| `done` | The action ran to the end | Snapshot and carry on |
-| `not_sent` | Nothing reached the phone | Fix the cause (by `code`), then retrying is safe |
-| `unknown` | Input **may** have reached the phone | **Never resend.** Snapshot and find out what actually happened |
+| `done` | The action ran to the end | Read the screen and carry on |
+| `not_sent` | Nothing reached the phone | Fix the cause, then a retry is safe |
+| `unknown` | Input **may** have reached the phone | **Never resend.** Read the screen and find out what happened |
 
-Resending after `unknown` is how a message gets sent twice or a toggle ends up flipped back. After
-`unknown`, read the screen and decide from what you see. If you cannot tell, ask the user.
+Resending after `unknown` is how a message gets sent twice or a switch gets flipped back. If the
+screen does not settle the question, ask the user. A result marked `isError` is a usage mistake,
+such as `tap` with no `ref`, `text` or `x,y`.
 
-A tool result marked `isError` is a usage mistake (for example `tap` with no `ref`, `text` or
-`x,y`). Fix the arguments.
+Every error code and its fix: [references/errors.md](references/errors.md).
 
-The full list of error codes, with the fix for each, is in
-[references/errors.md](references/errors.md). Read it when you get a code that is not covered here.
+## Typing and keys
 
-## Typing, keys and moving around
+- **Focus first, and only on a `done`.** `type {text, submit?}` goes into whatever field has focus.
+  If the tap on the field came back `not_sent` (for example, `ambiguous`), the text goes nowhere,
+  or into a field you did not mean. `submit: true` presses Return afterwards, which *sends* in
+  chat apps.
+- In ocr mode the text is pasted and then looked for on screen. `type_not_verified` (`unknown`)
+  means: read the field before anything else, and only type again if it is clearly empty.
+- **`key {name}`** accepts only `return, escape, tab, delete, up, down, left, right, space`, and
+  they go to whatever has focus. `escape` does not go back in iOS apps. In search fields it clears
+  and unfocuses but leaves search mode. To go back, tap the back button (in iph it is labelled with
+  the previous page's title), tap Cancel or ✕, or use `home`.
+- **Never type passwords, passcodes or verification codes**, even if the user offers them. Ask
+  the user to enter those on the phone.
 
-- **`type {text, submit?}`** types into the *focused* field, so tap the field first. `submit: true`
-  presses Return afterwards. In ocr mode, text is pasted and then looked for on screen. If it
-  cannot be confirmed you get `type_not_verified` with `unknown`: snapshot and look at the field
-  before you do anything else. Never retype on top of it.
-- **`key {name}`** accepts only `return, escape, tab, delete, up, down, left, right, space`.
-  `escape` does **not** go back in iOS apps. To go back, tap the back button (in iph its label is
-  the previous page's title) or use `home`.
-- **`scroll {direction: up|down}`** reveals more of a list. If a `not_found` element might be off
-  screen, scroll and look again, but give up after a few pages rather than scrolling forever.
-- **`swipe`** turns Home Screen pages and moves carousels. In ocr mode it is a wheel scroll (about
-  100 points per step), so edge gestures such as swipe-back do not work.
-- **`home`** goes to the Home Screen. It is the reliable way to get to a known state when you are lost.
-- **`screenshot {path?}`** saves a PNG and returns its path. Use it when text is not enough (an
-  icon-only screen, an image, a layout question). Read the image, then go back to text-based taps.
+## Moving around
 
-## The two modes differ in what they can see
-
-| | ocr (iPhone Mirroring) | iph (accessibility tree) |
-|---|---|---|
-| Sees | Only written text. Icon-only controls are invisible | Labelled controls, including icons |
-| Home Screen | App names come back as `app_icon` with the icon's frame | Normal elements |
-| Speed | Snapshot takes about 0.5 s | Snapshot takes about 1.5 s |
-| Needs | The Mirroring window visible and uncovered | The phone **unlocked**, USB trust, Developer Mode |
-
-Details and recovery per mode: [references/modes.md](references/modes.md).
+- **`scroll {direction: up|down}`** reveals more of a list. If an element is `not_found` and may be
+  below the fold, scroll and look again. Give up after a few pages rather than scrolling forever.
+- **`swipe`** turns Home Screen pages and moves carousels. In ocr mode it is a wheel scroll of about
+  100 points per step, so edge gestures (swipe-back, Control Center) are impossible.
+- To recognise the Home Screen, look for several app icons, not one label. "Settings" is also the
+  title inside the Settings app.
 
 ## A locked phone
 
-In iph mode, a phone that auto-locked shows up as a snapshot of the **Lock Screen** (date, time,
-notifications, Flashlight, Camera) instead of the app. When you see that, **stop and ask the user
-to unlock the phone** (and suggest Auto-Lock: Never for the session). Text and ref taps fail
-safely there, but `tap x,y`, `swipe`, `scroll`, `key` and `home` are *sent* and can wake the phone,
-trigger Face ID or press a Lock Screen control.
+In iph mode an auto-locked phone shows up as a snapshot of the **Lock Screen**: date, time,
+notifications, Flashlight and Camera. **Stop there and ask the user to unlock it**, and suggest
+Auto-Lock: Never for the session (doctor's iph checks include `auto_lock`). Text and ref taps fail
+safely on the Lock Screen, but `tap x,y`, `swipe`, `scroll`, `key` and `home` are *sent*. They wake
+the phone, can trigger Face ID, or press Flashlight, Camera or a notification. `auto` picks iph for a
+locked phone on USB unless Mirroring is connected, so being in iph mode does not mean the phone is
+unlocked.
 
-In ocr mode the opposite happens: unlocking the phone in someone's hand ends Mirroring, and input
-is refused with `mirror_disconnected`. The fix is for the user to lock the phone and click
-**Connect** in the Mirroring window.
+In ocr mode it is the other way round: unlocking ends Mirroring. With `--mode ocr`, input is then
+refused with `mirror_disconnected`, and the user locks the phone and clicks **Connect** in the
+Mirroring window. With `--mode auto`, the next command moves to iph if the phone is on USB, so check
+the `mode` of your next read.
 
 ## Ask before anything you cannot take back
 
-iphone-pilot itself does not ask for confirmation. It sends what you tell it to. You are the only
-check, so before an action with real-world effect, confirm the exact action with the user unless
-they already asked for that specific thing in this conversation. That covers sending a message or
-email, posting, calling, paying or buying, deleting, signing out, resetting, and changing
-security, privacy or account settings. Reading, navigating and opening apps need no confirmation.
+iphone-pilot sends whatever you tell it to and has no confirmation step of its own, so you are the
+only check. Confirm the exact action with the user first, unless they asked for exactly that thing
+in this conversation:
 
-When something unexpected is on screen (a permission prompt, a payment sheet, a "Delete?" alert, a
-notification banner over your target), do not tap through it to get back on track. Describe it
-and ask.
+- sending, posting or calling;
+- buying, subscribing, starting a trial, or tapping **Get** or **Install**;
+- creating an account or signing in, which includes choosing an Apple ID or email to share;
+- deleting, signing out or resetting;
+- changing security, privacy or account settings.
+
+Reading, navigating and opening apps need no confirmation.
+
+- **Installing an app:** match the exact name *and* developer before you tap Get. Lookalikes are
+  common: a search for "Chai" returned "Chai — Night Letters" and Character AI, but not the app
+  that was wanted. If the right app is not in the results, it may not be sold in the user's App
+  Store region. Stop and report what you found. Do not install the closest match.
+- **Something unexpected on screen:** a permission prompt, payment sheet, sign-in sheet, "Delete?"
+  alert, or notification banner over your target. Do not tap through it to get back on track.
+  Describe it and ask.
+
+## Privacy
+
+The screen shows the user's notifications, messages and accounts. Repeat only what the task needs.
+For example, if a notification is in the way, say so without reading it out. Screenshots capture
+everything on screen. Leave them at the default temporary path. Never save them into a project or
+share them, and offer to delete any you saved on purpose.
 
 ## Reporting back
 
-Tell the user what you did and what the phone shows now, based on the last snapshot rather than
-on what you assumed. If you stopped, say why and name the exact thing they need to do (quote the
-`user_action` when there is one).
+Say what you did and what the phone shows now, based on your last read rather than on what you
+expected. If you stopped, say why and name the exact thing the user needs to do, quoting the
+`user_action` when there is one. For long sessions (playtests, multi-app tasks), keep notes as you
+go and report progress at natural checkpoints. Do not save everything for the end.

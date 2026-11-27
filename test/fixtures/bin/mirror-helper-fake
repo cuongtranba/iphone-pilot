@@ -1,0 +1,18 @@
+#!/usr/bin/env bun
+// Stand-in for bin/mirror-helper: answers `window` from $FAKE_MIRROR_STREAMING ("1" = the phone is
+// shown) and `capture` with the saved Settings screenshot; every other command goes to the real helper.
+import { copyFileSync } from "node:fs";
+import { join } from "node:path";
+
+const [cmd, arg] = process.argv.slice(2);
+const streaming = process.env.FAKE_MIRROR_STREAMING === "1";
+
+if (cmd === "window") {
+  console.log(JSON.stringify({ found: true, running: true, on_screen: true, minimized: false, bounds: { x: 0, y: 0, w: 402, h: 874 }, streaming, ...(streaming ? {} : { message: "iPhone in Use" }) }));
+} else if (cmd === "capture") {
+  copyFileSync(join(import.meta.dir, "..", "settings.png"), arg!);
+  console.log(JSON.stringify({ ok: true, streaming }));
+} else {
+  const real = Bun.spawnSync([join(import.meta.dir, "..", "..", "..", "bin", "mirror-helper"), ...process.argv.slice(2)], { stdout: "inherit", stderr: "inherit" });
+  process.exit(real.exitCode ?? 1);
+}

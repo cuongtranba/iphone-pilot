@@ -191,7 +191,7 @@ const CASES: Case[] = [
       const s = await openSettingsRoot();
       const general = s.elements.find((e) => e.label === "General") as Element;
       await pilot.home();
-      // No snapshot here: a snapshot replaces the stored refs, and the point is that this ref is stale.
+      // General is not on the Home Screen, so its ref must be refused whether or not a read happens first.
       await sleep(1500);
       const o = await pilot.tap(general.ref);
       const after = await pilot.snapshot();

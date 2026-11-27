@@ -6,9 +6,9 @@ import type { Mode } from "./model.ts";
 
 const USAGE = `usage: iphone-pilot [--mode auto|ocr|iph] [--image file.png] <command>
   doctor                      readiness of both modes, with exact fixes
-  snapshot                    elements on screen as JSON (refs e1..eN)
+  snapshot                    elements on screen as JSON, each with a ref
   find <text>                 elements whose label/value contains text
-  tap <ref|text|x,y>          tap by ref from the last snapshot, by text, or at a point
+  tap <ref|text|x,y>          tap by ref from the latest read, by text, or at a point
   type <text> [--submit]      type text (Return after it with --submit)
   key <return|escape|tab|delete|up|down|left|right|space>
   swipe <up|down|left|right>

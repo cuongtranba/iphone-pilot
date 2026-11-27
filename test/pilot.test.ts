@@ -9,6 +9,7 @@ const fakeBin = join(import.meta.dir, "fixtures", "bin");
 const settingsPng = join(import.meta.dir, "fixtures", "settings.png");
 const homePng = join(import.meta.dir, "fixtures", "home.png");
 const originalPath = process.env.PATH;
+const originalHelper = process.env.IPHONE_PILOT_HELPER;
 
 let dir: string;
 let log: string;
@@ -30,6 +31,11 @@ beforeEach(() => {
 afterEach(() => {
   process.env.PATH = originalPath;
   delete process.env.FAKE_IPH_LOG;
+  delete process.env.FAKE_IPH_FRONT;
+  delete process.env.FAKE_IPH_SCREEN;
+  delete process.env.FAKE_MIRROR_STREAMING;
+  if (originalHelper === undefined) delete process.env.IPHONE_PILOT_HELPER;
+  else process.env.IPHONE_PILOT_HELPER = originalHelper;
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -100,5 +106,47 @@ test("a ref that is not in the last snapshot is refused as stale_ref and no inpu
 test("tapping text that is not on screen is refused as not_found and no input reaches iph", async () => {
   const out = await iph().tap("No Such Label");
   expect(out).toMatchObject({ ok: false, outcome: "not_sent", error: { code: "not_found" } });
+  expect(inputCommands()).toEqual([]);
+});
+
+test("doctor puts the phone back on the app it found", async () => {
+  process.env.FAKE_IPH_FRONT = "Notes";
+  const report = await iph().doctor();
+  expect(report.modes.iph.ready).toBe(true);
+  const commands = invoked().map((a) => a.join(" "));
+  expect(commands.filter((c) => c.startsWith("doctor"))).toEqual(["doctor --no-touch-test"]);
+  expect(commands.indexOf("launch Notes")).toBeGreaterThan(commands.indexOf("doctor --no-touch-test"));
+});
+
+test("a ref from an earlier read is refused once its element is gone, instead of tapping whatever took its number", async () => {
+  const before = await iph().snapshot();
+  const general = before.elements.find((e) => e.label === "General")!;
+  process.env.FAKE_IPH_SCREEN = "b";
+  const after = await iph().snapshot();
+  expect(after.elements.map((e) => e.label)).toContain("Bluetooth");
+
+  const out = await iph().tap(general.ref);
+  expect(out).toMatchObject({ ok: false, outcome: "not_sent", error: { code: "stale_ref" } });
+  expect(inputCommands()).toEqual([]);
+});
+
+test("auto uses ocr while Mirroring shows the phone and moves to iph once it stops", async () => {
+  process.env.IPHONE_PILOT_HELPER = join(fakeBin, "mirror-helper-fake");
+  const pilot = createPilot({ stateDir: dir });
+  process.env.FAKE_MIRROR_STREAMING = "1";
+  expect((await pilot.snapshot()).mode).toBe("ocr");
+  process.env.FAKE_MIRROR_STREAMING = "0";
+  expect((await pilot.snapshot()).mode).toBe("iph");
+});
+
+test("after auto switches mode, a ref from the other mode's read is refused and nothing is sent", async () => {
+  process.env.IPHONE_PILOT_HELPER = join(fakeBin, "mirror-helper-fake");
+  await iph().snapshot(); // an older iph read whose refs overlap the ocr ones
+  const pilot = createPilot({ stateDir: dir });
+  process.env.FAKE_MIRROR_STREAMING = "1";
+  const ocrRef = (await pilot.snapshot()).elements[0]!.ref;
+  process.env.FAKE_MIRROR_STREAMING = "0";
+  const out = await pilot.tap(ocrRef);
+  expect(out).toMatchObject({ ok: false, outcome: "not_sent", error: { code: "stale_ref" } });
   expect(inputCommands()).toEqual([]);
 });

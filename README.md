@@ -59,18 +59,20 @@ opening apps.
 
 ## How `auto` picks a mode
 
-- `auto` uses **iph** when the `iph` command is installed and `iph devices` lists a phone with
-  `ready: true`; otherwise it uses **ocr**.
-- `ready` in `iph devices` means paired and reachable over USB or Wi-Fi. It **does not check whether
-  the phone is locked**, and `auto` does not look at the mirror. So a phone that auto-locked while
-  plugged in still gets iph, even when iPhone Mirroring has reconnected and ocr would work.
-- The **CLI** decides on every command. The **MCP server** decides on its first tool call and keeps
-  that mode until it is restarted.
-- `iphone-pilot doctor` shows both modes' readiness in `modes.ocr` and `modes.iph`; the iph checks
-  include `screen_unlocked`. Its `"mode"` field uses this full check, so it can differ from what a
-  command picks: with a locked phone on USB, `doctor` says `ocr` while commands still pick iph.
-- To be sure of the mode, pass it: `--mode iph` or `--mode ocr` (for MCP:
-  `… src/cli.ts --mode iph mcp`).
+`auto` decides on **every command**, in the CLI and in the MCP server alike, so it follows the phone
+as it is locked and unlocked:
+
+1. If iPhone Mirroring is showing the phone, it uses **ocr**. Mirroring only streams while the phone is
+   locked, and iph cannot drive a locked phone.
+2. Otherwise, if the `iph` command is installed and `iph devices` lists a phone with `ready: true`
+   (paired and reachable over USB or Wi-Fi), it uses **iph**.
+3. Otherwise it uses **ocr**.
+
+The check costs about 25 ms (one window lookup, plus `iph devices` when the mirror is not streaming).
+`iphone-pilot doctor` shows both modes' readiness in `modes.ocr` and `modes.iph`, and its `"mode"`
+field is the same pick a command would make. Every result (`snapshot`, `find`) says which mode
+produced it. When the mode changes, refs from the other mode's read are refused (`stale_ref`). To fix
+the mode, pass it: `--mode iph` or `--mode ocr` (for MCP: `… src/cli.ts --mode iph mcp`).
 
 ## Install
 
@@ -113,9 +115,9 @@ with the action to take.
 ```text
 iphone-pilot [--mode auto|ocr|iph] [--image file.png] <command>
   doctor                      readiness of both modes, with the exact fix for each failed check
-  snapshot                    elements on screen as JSON (refs e1..eN)
+  snapshot                    elements on screen as JSON, each with a ref
   find <text>                 elements whose label or value contains the text
-  tap <ref|text|x,y>          tap by ref from the last snapshot, by text, or at a point
+  tap <ref|text|x,y>          tap by ref from the latest read, by text, or at a point
   type <text> [--submit]      type text into the focused field (Return after it with --submit)
   key <name>                  return, escape, tab, delete, up, down, left, right, space
   swipe <up|down|left|right>
@@ -136,13 +138,19 @@ iphone-pilot [--mode auto|ocr|iph] [--image file.png] <command>
 
 - `frame` and tap points are in the coordinate space of that mode's `snapshot().screen` (ocr: points
   of the phone picture inside the mirror window; iph: iOS points).
-- A ref is valid only for the latest snapshot. Every snapshot (and every tap or find by text, which
-  reads the screen) replaces the stored refs. They are kept in `~/Library/Caches/iphone-pilot`
-  (override with `IPHONE_PILOT_STATE_DIR`), so refs survive between CLI calls.
-- Before tapping a ref, the screen is read again: if that element is no longer where the snapshot saw
-  it, nothing is sent (`stale_ref`).
-- `tap <text>` taps a single match. No match is `not_found`, several are `ambiguous` with the
-  candidates; it never picks one for you.
+- A ref never names a different element. Every read (snapshot, find, or a tap by text, which reads
+  the screen first) keeps the ref of an element that is still there: same label and role, in the same
+  place. Any other element gets a new number, and numbers are never reused. So a ref from an earlier
+  read either still means the same element, or it is missing from the latest read and is refused
+  (`stale_ref`). Refs are therefore not always `e1..eN` in order.
+- Refs belong to the latest read, in whatever mode made it. It is kept in
+  `~/Library/Caches/iphone-pilot/last-read.json` (override the folder with `IPHONE_PILOT_STATE_DIR`),
+  so refs survive between CLI calls.
+- Before tapping a ref, the screen is read again. If that element is no longer where the read saw it,
+  nothing is sent (`stale_ref`).
+- `tap <text>` taps a single match. An exact label (ignoring case) wins over labels that only contain
+  the text. No match is `not_found`, and several are `ambiguous` with the candidates. It never picks
+  one for you.
 
 ### Outcomes
 
@@ -258,15 +266,22 @@ Recommendations for agent sessions:
 5. Notification banners are not in the app's tree and take taps near the top of the screen. For long
    unattended runs, `iph dnd on` (and `iph dnd off` afterwards) keeps most of them away.
 
-Unlocking the phone also ends iPhone Mirroring ("iPhone in Use"), so ocr stops working (its
-commands are refused with `mirror_disconnected`). Locking it again and clicking **Connect** in the
-Mirroring window brings ocr back.
+Unlocking the phone also ends iPhone Mirroring ("iPhone in Use"), so ocr stops working (with
+`--mode ocr`, its commands are refused with `mirror_disconnected`). Locking it again and clicking
+**Connect** in the Mirroring window brings ocr back. With `--mode auto`, the next command simply
+uses whichever mode the phone allows.
+
+`iphone-pilot doctor` leaves the phone where it was. To check the unlock and the accessibility tree,
+iph's doctor brings Settings to the front. So `iphone-pilot doctor` notes the app in front first, runs
+`iph doctor --no-touch-test`, and then reopens that app (iOS resumes it where it was), or goes to the
+Home Screen when no app was in front. Its `screen restored` check says which. The touch self-test is
+skipped because it scrolls Settings. Run `iph doctor` yourself to test touch.
 
 Other notes:
 
 - Icon-only controls have labels in iph (a back button is labelled with the previous page's title).
-- `iph doctor`'s own touch self-test scrolls Settings. It can fail when Settings is on a short page
-  (for example Auto-Lock); go back to the Settings root and run it again.
+- `iph doctor` run by hand includes a touch self-test that scrolls Settings. It can fail when Settings
+  is on a short page (for example Auto-Lock). Go back to the Settings root and run it again.
 
 ## Probe results
 

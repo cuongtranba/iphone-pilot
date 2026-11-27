@@ -38,7 +38,7 @@ async function helper(args: string[]): Promise<{ json: Json } | { fail: Outcome 
   if (!existsSync(bin)) {
     return { fail: notSent("helper_missing", `the Swift helper is not built (${bin})`, { user_action: BUILD }) };
   }
-  const proc = Bun.spawn([bin, ...args], { stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn([bin, ...args], { stdout: "pipe", stderr: "pipe", env: process.env });
   const [out, err, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
   try {
     return { json: JSON.parse(out) };
@@ -52,6 +52,17 @@ async function helper(args: string[]): Promise<{ json: Json } | { fail: Outcome 
 async function input(args: string[]): Promise<Outcome> {
   const r = await helper(args);
   return "fail" in r ? r.fail : (r.json as Outcome);
+}
+
+/**
+ * iPhone Mirroring is showing the phone's own screen right now. Mirroring only streams while the
+ * phone is locked, so this means iph could not drive it. False when the helper is missing or fails.
+ */
+export async function mirrorStreaming(): Promise<boolean> {
+  const r = await helper(["window"]);
+  if ("fail" in r) return false;
+  const w = r.json;
+  return w.found === true && w.streaming !== false && w.minimized !== true;
 }
 
 const RECONNECT = "lock the iPhone, then click Connect in the iPhone Mirroring window";
