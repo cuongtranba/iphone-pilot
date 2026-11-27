@@ -18,6 +18,8 @@ export interface OcrOptions {
 interface OcrLine {
   text: string;
   frame: { x: number; y: number; w: number; h: number };
+  /** The app icon this text labels (Home Screen, folders): only the icon takes a tap. */
+  icon?: { x: number; y: number; w: number; h: number };
 }
 interface Read {
   screen: { w: number; h: number };
@@ -67,7 +69,10 @@ export function createOcrDriver(opts: OcrOptions = {}): Driver {
     if (r.json.error) throw new ReadError(notSent(r.json.error.code ?? "ocr_failed", r.json.error.message ?? "ocr failed"));
     const lines: OcrLine[] = (r.json.lines ?? []).filter((l: OcrLine) => l.text.trim() !== "");
     const elements = readingOrder(
-      lines.map((l): DriverElement => ({ role: "text", label: l.text, frame: { x: l.frame.x, y: l.frame.y, w: l.frame.w, h: l.frame.h }, source: "ocr" })),
+      lines.map((l): DriverElement => {
+        const f = l.icon ?? l.frame;
+        return { role: l.icon ? "app_icon" : "text", label: l.text, frame: { x: f.x, y: f.y, w: f.w, h: f.h }, source: "ocr" };
+      }),
     );
     lastLines = elements.map((e) => ({ text: e.label, frame: e.frame }));
     return { screen: { w: r.json.screen.w, h: r.json.screen.h }, elements };
@@ -94,13 +99,14 @@ export function createOcrDriver(opts: OcrOptions = {}): Driver {
   const body = (lines: OcrLine[]) => new Set(lines.filter((l) => l.frame.y > 44).map((l) => l.text));
   const differs = (a: Set<string>, b: Set<string>) => a.size !== b.size || [...a].some((t) => !b.has(t));
 
-  /** Clicks, then OCRs until the screen differs from `before` (a few tries: app launches animate). */
+  /** Clicks, then OCRs until the screen differs from `before` or ~3 s pass (app launches animate). */
   async function clickAndObserve(x: number, y: number, before: OcrLine[]): Promise<Outcome> {
     const out = await input(["click", String(Math.round(x)), String(Math.round(y))]);
     if (out.outcome !== "done") return out;
     const was = body(before);
     let changed = false;
-    for (let i = 0; i < 3 && !changed; i++) {
+    const deadline = Date.now() + 3000;
+    while (!changed && Date.now() < deadline) {
       try {
         await read();
       } catch {

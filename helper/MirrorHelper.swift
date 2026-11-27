@@ -207,6 +207,33 @@ func upscaled(_ img: CGImage, factor: Int) -> CGImage {
     return ctx.makeImage() ?? img
 }
 
+/// Square-ish shapes the size of an app icon, as normalised Vision boxes (bottom-left origin).
+func detectIcons(_ img: CGImage) -> [CGRect] {
+    let request = VNDetectRectanglesRequest()
+    request.maximumObservations = 0
+    request.minimumAspectRatio = 0.75
+    request.maximumAspectRatio = 1.0
+    request.quadratureTolerance = 20
+    request.minimumConfidence = 0.3
+    request.minimumSize = 0.08
+    do { try VNImageRequestHandler(cgImage: img, options: [:]).perform([request]) } catch { return [] }
+    return (request.results ?? []).map(\.boundingBox)
+}
+
+/// The icon a label names: on the Home Screen (and in folders, App Library) the label sits just
+/// under its icon and only the icon takes the tap. Matches an icon-sized square that ends at most
+/// 16 pt above the label and is centred on it; the nearest one wins.
+func iconAbove(_ label: CGRect, _ icons: [CGRect]) -> CGRect? {
+    icons
+        .filter { icon in
+            let side = max(icon.width, icon.height)
+            let gap = label.minY - icon.maxY
+            return side >= 30 && side <= 90 && gap >= -2 && gap <= 16
+                && abs(icon.midX - label.midX) <= max(8, side * 0.2) && label.width <= side * 1.8
+        }
+        .min { (label.minY - $0.maxY) < (label.minY - $1.maxY) }
+}
+
 func runOCR(path: String) -> JSON {
     let started = Date()
     guard let loaded = loadImage(path) else { return ["ok": false, "error": ["code": "bad_image", "message": "cannot read image \(path)"]] }
@@ -224,12 +251,17 @@ func runOCR(path: String) -> JSON {
     do { try handler.perform([request]) } catch {
         return ["ok": false, "error": ["code": "ocr_failed", "message": "\(error)"]]
     }
+    let toPts = { (bb: CGRect) in
+        CGRect(x: bb.minX * widthPts, y: (1 - bb.maxY) * heightPts, width: bb.width * widthPts, height: bb.height * heightPts)
+    }
+    let icons = detectIcons(cropped).map(toPts)
     var lines: [JSON] = []
     for obs in request.results ?? [] {
         guard let cand = obs.topCandidates(1).first else { continue }
-        let bb = obs.boundingBox // normalised, origin bottom-left
-        let frame = CGRect(x: bb.minX * widthPts, y: (1 - bb.maxY) * heightPts, width: bb.width * widthPts, height: bb.height * heightPts)
-        lines.append(["text": cand.string, "confidence": (Double(cand.confidence) * 100).rounded() / 100, "frame": rectJSON(frame)])
+        let frame = toPts(obs.boundingBox) // Vision boxes are normalised with a bottom-left origin
+        var line: JSON = ["text": cand.string, "confidence": (Double(cand.confidence) * 100).rounded() / 100, "frame": rectJSON(frame)]
+        if let icon = iconAbove(frame, icons) { line["icon"] = rectJSON(icon) }
+        lines.append(line)
     }
     return [
         "lines": lines,
@@ -401,10 +433,9 @@ func toGlobal(_ win: MirrorWindow, _ content: CGRect, _ x: Double, _ y: Double) 
     CGPoint(x: win.bounds.minX + content.minX + CGFloat(x), y: win.bounds.minY + content.minY + CGFloat(y))
 }
 
-let hidSource = CGEventSource(stateID: .hidSystemState)
 
 func mouse(_ type: CGEventType, _ p: CGPoint, delta: CGPoint = .zero) {
-    let e = CGEvent(mouseEventSource: hidSource, mouseType: type, mouseCursorPosition: p, mouseButton: .left)
+    let e = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: p, mouseButton: .left)
     if type == .leftMouseDown || type == .leftMouseUp { e?.setIntegerValueField(.mouseEventClickState, value: 1) }
     if type == .leftMouseDragged {
         e?.setIntegerValueField(.mouseEventDeltaX, value: Int64(delta.x))
@@ -414,9 +445,20 @@ func mouse(_ type: CGEventType, _ p: CGPoint, delta: CGPoint = .zero) {
     e?.post(tap: .cghidEventTap)
 }
 
+/// The mirror drops a click that arrives right after the pointer enters it: measured live, a back
+/// button ignored clicks 30 ms after the move and took them 100 and 300 ms after it.
+let hoverSettle: useconds_t = 200_000
+
+/// Puts the pointer on `p` the way the mirror notices it: a warp plus a source-less move event
+/// (a move from the HID-state source alone left later clicks ignored, measured live).
+func hover(_ p: CGPoint) {
+    CGWarpMouseCursorPosition(p)
+    CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+    usleep(hoverSettle)
+}
+
 func doClick(_ p: CGPoint) {
-    mouse(.mouseMoved, p)
-    usleep(30_000)
+    hover(p)
     for (type, state) in [(CGEventType.leftMouseDown, 1), (CGEventType.leftMouseUp, 1)] {
         let e = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: p, mouseButton: .left)
         e?.setIntegerValueField(.mouseEventClickState, value: Int64(state))
@@ -426,8 +468,7 @@ func doClick(_ p: CGPoint) {
 }
 
 func doDrag(_ a: CGPoint, _ b: CGPoint, ms: Int) {
-    mouse(.mouseMoved, a)
-    usleep(60_000)
+    hover(a)
     mouse(.leftMouseDown, a)
     usleep(60_000)
     let steps = max(8, ms / 16)
@@ -442,9 +483,7 @@ func doDrag(_ a: CGPoint, _ b: CGPoint, ms: Int) {
     mouse(.leftMouseUp, b)
 }
 
-func doScroll(at p: CGPoint, vertical: Int32, horizontal: Int32) {
-    mouse(.mouseMoved, p)
-    usleep(30_000)
+func doScroll(vertical: Int32, horizontal: Int32) {
     CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: vertical, wheel2: horizontal, wheel3: 0)?.post(tap: .cghidEventTap)
 }
 
@@ -678,13 +717,14 @@ case "scroll":
         // "down" shows what is further down: a negative wheel delta. The mirror moves the content
         // ~100 pt per wheel event whatever the delta, so a longer scroll is several events.
         let at = CGPoint(x: win.bounds.minX + content.midX, y: win.bounds.minY + content.midY)
+        hover(at)
         for _ in 0..<max(1, steps) {
             // Direction names the content to reveal: "right" shows what lies further right.
             switch rest[0] {
-            case "down": doScroll(at: at, vertical: -300, horizontal: 0)
-            case "up": doScroll(at: at, vertical: 300, horizontal: 0)
-            case "right": doScroll(at: at, vertical: 0, horizontal: -300)
-            default: doScroll(at: at, vertical: 0, horizontal: 300)
+            case "down": doScroll(vertical: -300, horizontal: 0)
+            case "up": doScroll(vertical: 300, horizontal: 0)
+            case "right": doScroll(vertical: 0, horizontal: -300)
+            default: doScroll(vertical: 0, horizontal: 300)
             }
             usleep(120_000)
         }
