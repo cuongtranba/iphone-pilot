@@ -401,8 +401,17 @@ func toGlobal(_ win: MirrorWindow, _ content: CGRect, _ x: Double, _ y: Double) 
     CGPoint(x: win.bounds.minX + content.minX + CGFloat(x), y: win.bounds.minY + content.minY + CGFloat(y))
 }
 
-func mouse(_ type: CGEventType, _ p: CGPoint) {
-    CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+let hidSource = CGEventSource(stateID: .hidSystemState)
+
+func mouse(_ type: CGEventType, _ p: CGPoint, delta: CGPoint = .zero) {
+    let e = CGEvent(mouseEventSource: hidSource, mouseType: type, mouseCursorPosition: p, mouseButton: .left)
+    if type == .leftMouseDown || type == .leftMouseUp { e?.setIntegerValueField(.mouseEventClickState, value: 1) }
+    if type == .leftMouseDragged {
+        e?.setIntegerValueField(.mouseEventDeltaX, value: Int64(delta.x))
+        e?.setIntegerValueField(.mouseEventDeltaY, value: Int64(delta.y))
+        e?.setDoubleValueField(.mouseEventPressure, value: 1)
+    }
+    e?.post(tap: .cghidEventTap)
 }
 
 func doClick(_ p: CGPoint) {
@@ -418,22 +427,25 @@ func doClick(_ p: CGPoint) {
 
 func doDrag(_ a: CGPoint, _ b: CGPoint, ms: Int) {
     mouse(.mouseMoved, a)
-    usleep(30_000)
+    usleep(60_000)
     mouse(.leftMouseDown, a)
-    let steps = max(4, ms / 16)
+    usleep(60_000)
+    let steps = max(8, ms / 16)
     for i in 1...steps {
         let t = CGFloat(i) / CGFloat(steps)
-        mouse(.leftMouseDragged, CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t))
+        let next = CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
+        mouse(.leftMouseDragged, next, delta: CGPoint(x: (b.x - a.x) / CGFloat(steps), y: (b.y - a.y) / CGFloat(steps)))
         usleep(UInt32(max(1, ms / steps)) * 1000)
     }
-    usleep(40_000)
+    // Stay down at the end so the phone sees a stop, not a fling.
+    for _ in 0..<5 { mouse(.leftMouseDragged, b); usleep(30_000) }
     mouse(.leftMouseUp, b)
 }
 
-func doScroll(at p: CGPoint, pixels: Int32) {
+func doScroll(at p: CGPoint, vertical: Int32, horizontal: Int32) {
     mouse(.mouseMoved, p)
     usleep(30_000)
-    CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: pixels, wheel2: 0, wheel3: 0)?.post(tap: .cghidEventTap)
+    CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: vertical, wheel2: horizontal, wheel3: 0)?.post(tap: .cghidEventTap)
 }
 
 let keyCodes: [String: CGKeyCode] = [
@@ -647,6 +659,8 @@ case "click":
     })
 
 case "drag":
+    // Verified live: iPhone Mirroring ignores synthetic mouse drags (scroll wheel events do move
+    // content), so iphone-pilot does not use this for swipes. Kept for diagnostics.
     guard rest.count == 4 || rest.count == 5 else { usage("drag x1 y1 x2 y2 [ms]") }
     let v = rest.prefix(4).enumerated().map { number($0.element, "arg\($0.offset + 1)") }
     let ms = rest.count == 5 ? Int(number(rest[4], "ms")) : 300
@@ -658,14 +672,20 @@ case "drag":
     })
 
 case "scroll":
-    guard rest.count == 1 || rest.count == 2, rest[0] == "up" || rest[0] == "down" else { usage("scroll up|down [steps, default 3]") }
+    guard rest.count == 1 || rest.count == 2, ["up", "down", "left", "right"].contains(rest[0]) else { usage("scroll up|down|left|right [steps, default 3]") }
     let steps = rest.count == 2 ? Int(number(rest[1], "steps")) : 3
     emit(withMirror { win, content in
         // "down" shows what is further down: a negative wheel delta. The mirror moves the content
         // ~100 pt per wheel event whatever the delta, so a longer scroll is several events.
         let at = CGPoint(x: win.bounds.minX + content.midX, y: win.bounds.minY + content.midY)
         for _ in 0..<max(1, steps) {
-            doScroll(at: at, pixels: rest[0] == "down" ? -300 : 300)
+            // Direction names the content to reveal: "right" shows what lies further right.
+            switch rest[0] {
+            case "down": doScroll(at: at, vertical: -300, horizontal: 0)
+            case "up": doScroll(at: at, vertical: 300, horizontal: 0)
+            case "right": doScroll(at: at, vertical: 0, horizontal: -300)
+            default: doScroll(at: at, vertical: 0, horizontal: 300)
+            }
             usleep(120_000)
         }
     })

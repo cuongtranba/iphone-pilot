@@ -113,22 +113,6 @@ export function createOcrDriver(opts: OcrOptions = {}): Driver {
 
   const centre = (e: Pick<DriverElement, "frame">) => ({ x: e.frame.x + e.frame.w / 2, y: e.frame.y + e.frame.h / 2 });
 
-  /** Phone content size in points, from a throwaway capture. */
-  async function contentSize(): Promise<{ w: number; h: number } | { fail: Outcome }> {
-    const dir = mkdtempSync(join(tmpdir(), "iphone-pilot-"));
-    try {
-      const c = await helper(["capture", join(dir, "capture.png")]);
-      if ("fail" in c) return c;
-      if (c.json.ok !== true) {
-        const e = c.json.error ?? {};
-        return { fail: notSent(e.code ?? "capture_failed", e.message ?? "capture failed", { user_action: e.user_action }) };
-      }
-      return { w: c.json.content.w, h: c.json.content.h };
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
-
   const driver: Driver = {
     mode: "ocr",
 
@@ -240,16 +224,10 @@ export function createOcrDriver(opts: OcrOptions = {}): Driver {
 
     async swipe(dir: Direction) {
       if (opts.image) return readOnly();
-      const dir_ = await contentSize();
-      if ("fail" in dir_) return dir_.fail;
-      const { w, h } = dir_;
-      const [cx, cy] = [w / 2, h / 2];
-      const [x1, y1, x2, y2] =
-        dir === "up" ? [cx, h * 0.7, cx, h * 0.3]
-        : dir === "down" ? [cx, h * 0.3, cx, h * 0.7]
-        : dir === "left" ? [w * 0.8, cy, w * 0.2, cy]
-        : [w * 0.2, cy, w * 0.8, cy];
-      return input(["drag", ...[x1, y1, x2, y2].map((n) => String(Math.round(n))), "300"]);
+      // The mirror ignores synthetic mouse drags, but moves the content for wheel events, so a
+      // swipe is a scroll in the opposite direction (finger up = see what is further down).
+      const [wheel, steps] = { up: ["down", 3], down: ["up", 3], left: ["right", 5], right: ["left", 5] }[dir] as [string, number];
+      return input(["scroll", wheel, String(steps)]);
     },
 
     async scroll(dir) {
