@@ -1,10 +1,10 @@
 # The two modes in detail
 
-The server is started with `--mode auto|ocr|iph`. With `auto` it uses iph when `iph devices` lists a
-ready (paired, connected) phone and ocr otherwise. That check does not look at whether the phone is
-locked, so a locked phone on USB still gets iph. The mode is chosen on the first command and kept for
-the whole session. To switch, the user restarts the server, optionally with `--mode ocr` or
-`--mode iph` to force one.
+The server is started with `--mode auto|ocr|iph`. With `auto` the mode is chosen on every command:
+ocr while iPhone Mirroring shows the phone, otherwise iph when `iph devices` lists a ready (paired,
+connected) phone, otherwise ocr. `iph devices` does not report the lock, so a locked phone on USB with
+Mirroring not connected still gets iph. Refs from a read in the other mode are refused after a
+switch. `--mode ocr` or `--mode iph` fixes the mode.
 
 The two modes exclude each other through the lock state. ocr needs the phone **locked** and near
 the Mac with Mirroring connected. iph needs it **unlocked** on USB, and unlocking ends Mirroring
@@ -57,11 +57,12 @@ something to fix.
   unattended runs the user can turn on `iph dnd on` (and `iph dnd off` afterwards).
 - **Switches and fields carry `value`** (a switch reads `"1"` or `"0"`, or `On` or `Off`). Check it
   after a toggle instead of trusting `screen_changed`.
-- **`doctor` changes the screen in this mode.** It runs `iph doctor`, whose self-test brings Settings
-  to the front and scrolls it one step and back. Run it before a task, not in the middle of one.
-  The self-test can fail when Settings sits on a short page (for example Auto-Lock). Going back to
-  the Settings root and running it again fixes that. While Mirroring is streaming, iph's checks fail
-  (`accessibility_tree`: Settings is not in front). The phone is locked for Mirroring, which is
-  expected.
+- **`doctor` in this mode** runs `iph doctor --no-touch-test`. That briefly brings Settings to the
+  front, then reopens the app that was in front (iOS resumes it where it was) or goes to the Home
+  Screen. Its `screen restored` check says which. Touch input is not tested, so as not to scroll
+  Settings. If taps fail for no visible reason, the user can run `iph doctor` by hand, which does
+  test touch. That test can fail when Settings sits on a short page (for example Auto-Lock); going
+  back to the Settings root and running it again fixes that. While Mirroring is streaming, iph's
+  checks fail because the phone is locked for Mirroring, which is expected.
 - **`developer_disk_image` or `screen_unlocked` failing** right after the phone restarted or
   auto-locked usually just means it is locked. Ask the user to unlock it and run `doctor` again.

@@ -47,6 +47,39 @@ function toOutcome(r: Run | "missing"): Outcome {
   return rest as Outcome;
 }
 
+const TOUCH_UNTESTED = "not tested, so the screen is left alone; run `iph doctor` to test touch";
+
+interface FrontApp {
+  name?: string;
+  bundle_id?: string;
+}
+
+/** The foreground app per `iph read --app`; undefined when the read failed (nothing is known). */
+async function foregroundApp(): Promise<{ app: FrontApp | undefined } | undefined> {
+  const r = await run(["read", "--app"]);
+  if (r === "missing" || !r.json || r.json.ok === false) return undefined;
+  const a = r.json.apps?.[0];
+  return { app: a ? { name: a.name, bundle_id: a.bundle_id } : undefined };
+}
+
+/**
+ * Puts the phone back after iph's doctor opened Settings: the app that was in front is launched
+ * (no restart, so iOS resumes it where it was); the Home Screen has no launchable app, so it, and
+ * a failed launch, fall back to the Home button. Returns what was done, or undefined if nothing was.
+ */
+async function restore(app: FrontApp | undefined): Promise<string | undefined> {
+  if (app?.name === "Settings" || app?.bundle_id === "com.apple.Preferences") return undefined;
+  const target = app?.bundle_id ?? app?.name;
+  if (target) {
+    const launched = await run(["launch", target]);
+    if (launched !== "missing" && launched.json?.ok === true) return `reopened ${app?.name ?? target}`;
+  }
+  const home = await run(["button", "home"]);
+  return home !== "missing" && home.json?.ok === true
+    ? "went to the Home Screen"
+    : "could not put the phone back; it may still show Settings";
+}
+
 export function createIphDriver(): Driver {
   const cmd = async (args: string[]) => toOutcome(await run(args));
 
@@ -57,21 +90,29 @@ export function createIphDriver(): Driver {
       if (!iphPath()) {
         return { ready: false, checks: [{ check: "iph installed", ok: false, detail: "iph not found on PATH", user_action: INSTALL }] };
       }
-      const d = await run(["doctor"]);
+      // iph's doctor opens Settings (and, unless told not to, scrolls it), so note where the phone is first.
+      const front = await foregroundApp();
+      const d = await run(["doctor", "--no-touch-test"]);
       if (d === "missing" || !d.json) {
         return { ready: false, checks: [{ check: "iph doctor", ok: false, detail: `iph doctor exited ${d === "missing" ? "?" : d.exit} without JSON`, user_action: "run: iph doctor" }] };
       }
       // Only iph's required checks decide readiness; its advice (wifi, auto_lock) stays as detail.
+      // The touch self-test is skipped on purpose, so a skipped touch_input does not fail the report.
       const checks: Check[] = (d.json.checks ?? []).map((c: any) => {
-        const ok = c.status === "ok" || c.required === false;
-        const detail = [c.status !== "ok" ? c.status : "", c.detail ?? "", ok ? (c.user_action ?? "") : ""].filter(Boolean).join(": ");
+        const untested = c.check === "touch_input" && c.status === "skipped";
+        const ok = c.status === "ok" || c.required === false || untested;
+        const detail = untested
+          ? TOUCH_UNTESTED
+          : [c.status !== "ok" ? c.status : "", c.detail ?? "", ok ? (c.user_action ?? "") : ""].filter(Boolean).join(": ");
         return { check: c.check, ok, ...(detail ? { detail } : {}), ...(ok ? {} : { user_action: c.user_action ?? "run: iph doctor" }) };
       });
-      const ready = d.json.ready === true;
-      if (!ready && !checks.some((c) => !c.ok)) {
-        checks.push({ check: "iph ready", ok: false, user_action: "run: iph doctor" });
+      if (checks.length === 0) checks.push({ check: "iph ready", ok: false, user_action: "run: iph doctor" });
+      const unlocked = (d.json.checks ?? []).some((c: any) => c.check === "screen_unlocked" && c.status === "ok");
+      if (front && unlocked) {
+        const restored = await restore(front.app);
+        if (restored) checks.push({ check: "screen restored", ok: true, detail: restored });
       }
-      return { ready, checks };
+      return { ready: checks.every((c) => c.ok), checks };
     },
 
     async read() {

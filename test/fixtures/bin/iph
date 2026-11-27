@@ -26,7 +26,10 @@ const ELEMENTS = [
   el("c0ffee07", "button", "Offscreen", f(16, 2000, 370, 44), { on_screen: false }),
   el("c0ffee08", "other", "Frameless", undefined),
 ];
-const KNOWN_IDS = new Set(ELEMENTS.map((e) => e.id).filter((id) => id !== "gone0000"));
+// FAKE_IPH_SCREEN=b is a later screen: General is gone and Bluetooth sits where a reader would count it next.
+const SCREEN_B = [...ELEMENTS.filter((e) => e.id !== "c0ffee02"), el("c0ffee09", "button", "Bluetooth", f(16, 280, 370, 44))];
+const SHOWN = process.env.FAKE_IPH_SCREEN === "b" ? SCREEN_B : ELEMENTS;
+const KNOWN_IDS = new Set(SHOWN.map((e) => e.id).filter((id) => id !== "gone0000"));
 
 const notSent = (code: string, message: string) =>
   print({ ok: false, outcome: "not_sent", elapsed_ms: 5, error: { code, message, hint: "fake hint" } }, 1);
@@ -35,15 +38,29 @@ const done = (extra: object = {}) => print({ ok: true, outcome: "done", elapsed_
 switch (cmd) {
   case "devices":
     print({ count: 1, selected: "FAKE-UDID", devices: [{ udid: "FAKE-UDID", connection: "usb", ios_version: "26.0", model: "iPhone", paired: true, ready: true, state: "ready" }], discovery_error: null });
-  case "doctor":
-    print({ ready: true, udid: "FAKE-UDID", connection: "usb", failing: [], checks: [{ check: "device", required: true, status: "ok" }] });
+  case "doctor": {
+    // Like iph 0.1.10: --no-touch-test skips the touch check, which is required, so iph itself says not ready.
+    const noTouch = rest.includes("--no-touch-test");
+    const touch = noTouch ? { check: "touch_input", required: true, status: "skipped", detail: "--no-touch-test" } : { check: "touch_input", required: true, status: "ok" };
+    print({
+      ready: !noTouch,
+      udid: "FAKE-UDID",
+      connection: "usb",
+      failing: noTouch ? ["touch_input"] : [],
+      checks: [{ check: "device", required: true, status: "ok" }, { check: "screen_unlocked", required: true, status: "ok" }, touch, { check: "wifi", required: false, status: "warn", user_action: "join the same Wi-Fi" }],
+    });
+  }
   case "read":
-    print({ ok: true, outcome: "done", screen: { width: 402, height: 874 }, apps: [{ pid: 77, name: "Settings" }], count: ELEMENTS.length, pass: 1, seq: 1, elements: ELEMENTS });
+    print({ ok: true, outcome: "done", screen: { width: 402, height: 874 }, apps: [{ pid: 77, name: process.env.FAKE_IPH_FRONT ?? "Settings" }], count: SHOWN.length, pass: 1, seq: 1, elements: SHOWN });
+  case "launch":
+    // SpringBoard (the Home Screen) is not a launchable app.
+    if (rest[0] === "SpringBoard") notSent("not_found", "no app named SpringBoard");
+    done();
   case "tap": {
     const sel = rest[0] ?? "";
     if (sel.startsWith("id=") && !KNOWN_IDS.has(sel.slice(3))) notSent("not_found", `no element matches ${sel}`);
     // Like the real iph 0.1.10: a tap result carries the screen it read afterwards.
-    done({ verified: true, screen_changed: true, screen: { width: 402, height: 874 }, apps: [{ pid: 77, name: "Settings" }], count: ELEMENTS.length, seq: 2, elements: ELEMENTS });
+    done({ verified: true, screen_changed: true, screen: { width: 402, height: 874 }, apps: [{ pid: 77, name: "Settings" }], count: SHOWN.length, seq: 2, elements: SHOWN });
   }
   case "type":
   case "key":

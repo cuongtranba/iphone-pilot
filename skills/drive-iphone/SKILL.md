@@ -20,15 +20,16 @@ exact fix.
 
 - If the mode you need is not ready, give the user its failed checks' `user_action` lines word for
   word and stop. Do not work around a missing permission or setting.
-- Run it **at the start, not mid-task**. In iph mode, doctor runs iph's own self-test, which brings
-  Settings to the front and scrolls it, so it moves the phone away from the screen you were on.
-  Mid-task, work out the problem from the error code and a `snapshot` instead.
+- Run it **at the start**, before the task. It is slower than a snapshot. In iph mode it opens
+  Settings to test the phone and then reopens the app that was in front, so it leaves the phone
+  where it was. Mid-task, work out the problem from the error code and a `snapshot` first.
 - The two modes normally exclude each other. ocr needs the phone **locked** with Mirroring
   connected. iph needs it **unlocked** on USB, and unlocking the phone ends Mirroring. So usually
   only one mode is ready, and that is expected.
-- The server picks its mode on the first command and keeps it for the session. The `mode` field of
-  any `snapshot` tells you which one you are in. doctor's own `mode` field is a fresh pick and can
-  differ from it.
+- With `--mode auto`, the mode is re-chosen on every command: ocr while Mirroring shows the phone,
+  otherwise iph if a phone is ready on USB. It can therefore change mid-task when the phone is locked
+  or unlocked. The `mode` field of each `snapshot` or `find` tells you which mode you are in, and
+  doctor's `mode` is the same pick.
 
 ## The loop
 
@@ -46,16 +47,16 @@ Apps reopen where they were left: deep in a page, in search mode, or with a shee
 open an app, read the screen before you assume where you are. `home` is the reliable way back to a
 known state.
 
-## Refs: a ref is a number in the *latest* read
+## Refs: always from your latest read
 
-Refs are `e1..eN` in reading order, renumbered by every `snapshot`, every `find` and every text
-`tap` (which reads the screen first). `tap {ref}` always resolves against the most recent read. So
-a ref you remember from an earlier read does **not** necessarily fail. It can silently name a
-different element. In testing, an old `e20` opened Notes from the Home Screen.
+Every `snapshot`, `find` and text `tap` (which reads the screen first) is a new read. In each read,
+an element that is still there, with the same label and role in the same place, keeps its ref. Every
+other element gets a new number, and numbers are never reused. So a ref from an earlier read either
+still means the same element or is refused as `stale_ref`. It never silently taps something else.
+Refs are not always `e1..eN` in order.
 
-- Take a ref from the read you just made, and use it before any other read.
-- `stale_ref` covers only two cases: the ref number is missing from the latest read, or its
-  element moved or disappeared since that read. Then read again and use the new ref.
+- Prefer the ref from the read you just made. If you get `stale_ref`, the element moved, changed or
+  disappeared, or the mode changed since that read. Read again and use the new ref.
 - The refs in an `ambiguous` result's `candidates` come from the read that tap just made, so they
   are current.
 
@@ -123,11 +124,14 @@ In iph mode an auto-locked phone shows up as a snapshot of the **Lock Screen**: 
 notifications, Flashlight and Camera. **Stop there and ask the user to unlock it**, and suggest
 Auto-Lock: Never for the session (doctor's iph checks include `auto_lock`). Text and ref taps fail
 safely on the Lock Screen, but `tap x,y`, `swipe`, `scroll`, `key` and `home` are *sent*. They wake
-the phone, can trigger Face ID, or press Flashlight, Camera or a notification. `auto` still picks
-iph for a locked phone on USB, so being in iph mode does not mean the phone is unlocked.
+the phone, can trigger Face ID, or press Flashlight, Camera or a notification. `auto` picks iph for a
+locked phone on USB unless Mirroring is connected, so being in iph mode does not mean the phone is
+unlocked.
 
-In ocr mode it is the other way round: unlocking ends Mirroring and input is refused with
-`mirror_disconnected`. The user locks the phone and clicks **Connect** in the Mirroring window.
+In ocr mode it is the other way round: unlocking ends Mirroring. With `--mode ocr`, input is then
+refused with `mirror_disconnected`, and the user locks the phone and clicks **Connect** in the
+Mirroring window. With `--mode auto`, the next command moves to iph if the phone is on USB, so check
+the `mode` of your next read.
 
 ## Ask before anything you cannot take back
 

@@ -12,7 +12,7 @@ paraphrasing.
 
 | Code | Meaning | Do this |
 |---|---|---|
-| `stale_ref` | The ref number is not in the latest read, or its element moved or disappeared since that read. An old ref number that *is* in the latest read is **not** refused: it names whatever element has that number now | `snapshot` (or `find`), then tap the new ref or tap by text |
+| `stale_ref` | The ref is not in the latest read (its element changed or disappeared, or the latest read was in the other mode), or the element moved since that read | `snapshot` (or `find`), then tap the new ref or tap by text |
 | `not_found` | No element's label or value contains that text | Snapshot and use the label as written. Try a shorter part of it. Scroll if it may be off screen. In ocr mode, the text may be misread or the control may be icon-only. On a Lock Screen snapshot, the phone has locked |
 | `ambiguous` | Several elements contain the text and none matches it exactly. `candidates` lists them with refs from the read just made | Choose by role, frame or value, then `tap {ref}`. Or repeat the tap with the full label exactly as shown (for example `Q Search`). Never guess when the candidates mean different actions |
 | `unknown_key` | `key` name is not supported | Use `return, escape, tab, delete, up, down, left, right, space` |
@@ -38,13 +38,13 @@ paraphrasing.
 | Code | Meaning | Do this |
 |---|---|---|
 | `iph_missing` | The `iph` CLI is not installed or not on PATH | Run `doctor` and pass on its `user_action` |
-| `iph_bad_output` | `iph` exited without JSON | Try one `snapshot`. If that fails too, the phone is probably disconnected, locked or untrusted, so run `doctor` (in iph mode it opens Settings) and pass on its `user_action` |
+| `iph_bad_output` | `iph` exited without JSON | Try one `snapshot`. If that fails too, the phone is probably disconnected, locked or untrusted, so run `doctor` and pass on its `user_action` |
 | other codes | Passed through from `iph` itself | Follow `user_action` or `hint`. Run `doctor` if the cause is unclear |
 
 ## Readiness checks
 
 `doctor` returns `{mode, ready, modes: {ocr: {ready, checks}, iph: {ready, checks}}}`, where each
 check is `{check, ok, detail?, user_action?}`. In iph mode, `screen_unlocked` failing means "Unlock
-the phone". This is the one check you will hit mid-session. `doctor`'s `mode` is a fresh pick,
-while the MCP server keeps the mode it picked on its first command, so the two can differ. The
-`mode` of a `snapshot` is the one your actions use.
+the phone". This is the one check you will hit mid-session. `doctor`'s `mode` is the same pick a
+command makes right now. With `--mode auto`, that pick is made on every command, so it can change when
+the phone is locked or unlocked.
