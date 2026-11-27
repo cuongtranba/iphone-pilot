@@ -492,24 +492,6 @@ let keyCodes: [String: CGKeyCode] = [
     "up": 126, "down": 125, "left": 123, "right": 124,
 ]
 
-// US ANSI layout: character -> (keycode, needs shift)
-let asciiKeys: [Character: (CGKeyCode, Bool)] = {
-    var m: [Character: (CGKeyCode, Bool)] = [:]
-    let rows: [(String, [CGKeyCode])] = [
-        ("abcdefghijklmnopqrstuvwxyz", [0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32, 9, 13, 7, 16, 6]),
-        ("1234567890", [18, 19, 20, 21, 23, 22, 26, 28, 25, 29]),
-    ]
-    for (chars, codes) in rows { for (c, k) in zip(chars, codes) { m[c] = (k, false); m[Character(c.uppercased())] = (k, true) } }
-    m["!"] = (18, true); m["@"] = (19, true); m["#"] = (20, true); m["$"] = (21, true); m["%"] = (23, true)
-    m["^"] = (22, true); m["&"] = (26, true); m["*"] = (28, true); m["("] = (25, true); m[")"] = (29, true)
-    m[" "] = (49, false); m["-"] = (27, false); m["_"] = (27, true); m["="] = (24, false); m["+"] = (24, true)
-    m["["] = (33, false); m["{"] = (33, true); m["]"] = (30, false); m["}"] = (30, true)
-    m["\\"] = (42, false); m["|"] = (42, true); m[";"] = (41, false); m[":"] = (41, true)
-    m["'"] = (39, false); m["\""] = (39, true); m[","] = (43, false); m["<"] = (43, true)
-    m["."] = (47, false); m[">"] = (47, true); m["/"] = (44, false); m["?"] = (44, true)
-    m["`"] = (50, false); m["~"] = (50, true)
-    return m
-}()
 
 func postKey(_ code: CGKeyCode, flags: CGEventFlags = []) {
     // A modifier is a real key event of its own: the mirror forwards modifiers to the phone only
@@ -540,31 +522,98 @@ func postKey(_ code: CGKeyCode, flags: CGEventFlags = []) {
     }
 }
 
-func typeASCII(_ text: String, win: MirrorWindow, centre: CGPoint) throws {
-    for (i, ch) in text.enumerated() {
-        if i % 8 == 0 { try stillFront(win, at: centre) }
-        let (code, shift) = asciiKeys[ch]!
-        postKey(code, flags: shift ? .maskShift : [])
+/// All text goes through the pasteboard + Cmd+V. Key events are not used for text: the phone
+/// reads them through its own hardware-keyboard layout, so on a Vietnamese Telex layout "wifi"
+/// arrives as "ưifi" (seen live).
+let envMs = { (name: String, def: Double) in (Double(ProcessInfo.processInfo.environment[name] ?? "") ?? def) / 1000 }
+/// Wait after Cmd+V before giving focus back: the phone fetches the text just after the key.
+let pasteAfter = envMs("MIRROR_HELPER_PASTE_MS", 500)
+/// Wait between the mirror coming to the front and Cmd+V, for the new pasteboard to reach the phone.
+let pasteBefore = envMs("MIRROR_HELPER_PASTE_BEFORE_MS", 600)
+
+// The user's pasteboard is put back, but late. Restoring right after the paste made the next
+// paste insert the restored contents (Universal Clipboard lagged behind the quick changes; 5/5
+// pastes were right without the restore, most were wrong with it). So a detached
+// `restore-pasteboard` puts it back after `restoreDelay`, unless a newer paste took over (it then
+// inherits the saved contents) or the user copied something else meanwhile (then nothing is restored).
+let restoreDelay = envMs("MIRROR_HELPER_RESTORE_MS", 8000)
+let pendingRestorePath: String = {
+    let dir = (ProcessInfo.processInfo.environment["IPHONE_PILOT_STATE_DIR"]
+        ?? (NSHomeDirectory() + "/Library/Caches/iphone-pilot"))
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    return dir + "/pasteboard-restore.plist"
+}()
+
+/// Serialised pasteboard items: one [type: data] dictionary per item.
+typealias SavedItems = [[String: Data]]
+
+func currentItems() -> SavedItems {
+    (NSPasteboard.general.pasteboardItems ?? []).map { item in
+        var d: [String: Data] = [:]
+        for t in item.types { if let v = item.data(forType: t) { d[t.rawValue] = v } }
+        return d
     }
 }
 
-/// Non-ASCII text goes through the pasteboard + Cmd+V; the previous string contents are restored.
-let pasteSettle = (Double(ProcessInfo.processInfo.environment["MIRROR_HELPER_PASTE_MS"] ?? "") ?? 1500) / 1000
+func readPending() -> (token: String, changeCount: Int, items: SavedItems)? {
+    guard let data = FileManager.default.contents(atPath: pendingRestorePath),
+          let p = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+          let token = p["token"] as? String, let cc = p["changeCount"] as? Int, let items = p["items"] as? SavedItems
+    else { return nil }
+    return (token, cc, items)
+}
 
-func typeViaPasteboard(_ text: String, win: MirrorWindow, centre: CGPoint) throws {
+func writePending(token: String, changeCount: Int, items: SavedItems) {
+    let p: [String: Any] = ["token": token, "changeCount": changeCount, "items": items]
+    if let data = try? PropertyListSerialization.data(fromPropertyList: p, format: .binary, options: 0) {
+        FileManager.default.createFile(atPath: pendingRestorePath, contents: data, attributes: [.posixPermissions: 0o600])
+    }
+}
+
+/// Puts `text` on the pasteboard, remembering what to restore (inherited from a pending restore).
+func lendPasteboard(_ text: String) -> String {
     let pb = NSPasteboard.general
-    let saved = pb.string(forType: .string)
+    // A pending restore whose text is still on the pasteboard holds the user's real contents.
+    let pending = readPending()
+    let saved = (pending != nil && pending!.changeCount == pb.changeCount) ? pending!.items : currentItems()
     pb.clearContents()
     pb.setString(text, forType: .string)
-    defer {
-        // The phone fetches the Mac pasteboard (Universal Clipboard) after Cmd+V; restoring too
-        // early makes it paste the old contents.
-        pump(pasteSettle)
-        pb.clearContents()
-        if let saved { pb.setString(saved, forType: .string) }
+    let token = UUID().uuidString
+    writePending(token: token, changeCount: pb.changeCount, items: saved)
+    return token
+}
+
+/// Starts the detached restorer; its output is detached so the caller does not wait for it.
+func scheduleRestore(_ token: String) {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+    p.arguments = ["restore-pasteboard", token]
+    p.standardInput = FileHandle.nullDevice
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    try? p.run()
+}
+
+func restorePasteboard(token: String) {
+    pump(restoreDelay)
+    guard let pending = readPending(), pending.token == token else { return } // a newer paste owns it
+    try? FileManager.default.removeItem(atPath: pendingRestorePath)
+    let pb = NSPasteboard.general
+    guard pb.changeCount == pending.changeCount else { return } // the user copied something since
+    pb.clearContents()
+    let items = pending.items.map { d -> NSPasteboardItem in
+        let item = NSPasteboardItem()
+        for (t, v) in d { item.setData(v, forType: NSPasteboard.PasteboardType(t)) }
+        return item
     }
+    if !items.isEmpty { pb.writeObjects(items) }
+}
+
+func paste(win: MirrorWindow, centre: CGPoint) throws {
+    pump(pasteBefore)
     try stillFront(win, at: centre)
     postKey(9, flags: .maskCommand) // v
+    pump(pasteAfter)
 }
 
 // MARK: - Menu (AX)
@@ -733,11 +782,18 @@ case "scroll":
 case "type":
     guard rest.count == 1 else { usage("type <text>") }
     let text = rest[0]
-    emit(withMirror { win, _ in
-        let centre = CGPoint(x: win.bounds.midX, y: win.bounds.midY)
-        if text.allSatisfy({ asciiKeys[$0] != nil }) { try typeASCII(text, win: win, centre: centre) }
-        else { try typeViaPasteboard(text, win: win, centre: centre) }
-    })
+    // On the pasteboard before the mirror is raised, so it is there when the mirror takes focus.
+    let token = lendPasteboard(text)
+    let result = withMirror { win, _ in
+        try paste(win: win, centre: CGPoint(x: win.bounds.midX, y: win.bounds.midY))
+    }
+    scheduleRestore(token)
+    emit(result)
+
+case "restore-pasteboard":
+    guard rest.count == 1 else { usage("restore-pasteboard <token>") }
+    restorePasteboard(token: rest[0])
+    exit(0)
 
 case "key":
     guard rest.count == 1, let code = keyCodes[rest[0]] else { usage("key return|escape|tab|delete|up|down|left|right|space") }
