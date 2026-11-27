@@ -152,8 +152,11 @@ the mirror. Here, before **any** input the helper:
 
 Text is never typed key by key: the phone reads key events through its own hardware-keyboard layout
 (a Vietnamese Telex layout turned `wifi` into `ưifi`). It is pasted instead (any language, emoji), and
-then looked for on screen; if it cannot be seen the result is `unknown`, never a retype. Your clipboard
-is put back 8 seconds later, or left alone if you copied something in between.
+then looked for on screen. Universal Clipboard sometimes hands the phone its previous item (about one
+paste in ten). When nothing was inserted, the paste is repeated. When something else was inserted, it
+is undone with ⌘Z, and the paste is repeated only if the screen is back exactly as before. In every
+other case the result is `unknown`, never a blind retype. Your clipboard is put back 8 seconds later,
+or left alone if you copied something in between.
 
 ## Limits of ocr mode
 
@@ -165,10 +168,24 @@ is put back 8 seconds later, or left alone if you copied something in between.
 - OCR can misread small or decorated text (`Q Search` for the search field, a clock read as `12:281`).
 - `escape` on a hardware keyboard does not go back in iOS apps.
 
+## Notes on iph mode
+
+- A locked phone is read as its Lock Screen, and `iph` sends input to that screen; it does not refuse
+  it. Check `doctor` (`screen_unlocked`) before driving the phone, and keep Auto-Lock off for long
+  sessions.
+- Icon-only controls have labels here (a back button is labelled with the previous page's title).
+
 ## Probe results
 
 `bun run probe -- --mode ocr|iph` runs a live matrix on the phone (Settings and the Home Screen only)
-and records it in [docs/probe-results.md](docs/probe-results.md).
+and records it in [docs/probe-results.md](docs/probe-results.md). On an iPhone 16 Pro with iOS 27.2.1, all
+16 ocr cases and all 13 iph cases pass, including the refusals: covered, minimized, disconnected or
+closed mirror, stale refs, missing text, `iph` not installed, and a locked phone.
+
+| Home Screen snapshot | elements | read time | JSON | PNG screenshot |
+|---|---|---|---|---|
+| ocr | 39 | 0.46 s | 4.2 KB | 746 KB (2x display) |
+| iph | 23 | 1.5 s | 2.8 KB | 5.1 MB |
 
 ## Development
 

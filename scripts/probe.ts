@@ -82,7 +82,9 @@ async function openSettingsRoot(): Promise<Snapshot> {
   // Settings reopens where it was left: in search mode, or on a sub-page (walk back).
   for (let i = 0; i < 6 && !inSettingsRoot(s); i++) {
     const back = backButton(s);
-    if (searchField(s) && s.elements.length < 8) await leaveSearch();
+    // Search mode: the field at the bottom (OCR reads its magnifier as "Q", the text may be anything).
+    const searching = s.elements.some((e) => e.frame.y > s.screen.h * 0.75 && (e.role === "search_field" || /^q(\s|$)/i.test(e.label)));
+    if (searching) await leaveSearch();
     else if (mode === "ocr") await pilot.tap(BACK);
     else if (back) await pilot.tap(back.ref);
     s = await pilot.snapshot();

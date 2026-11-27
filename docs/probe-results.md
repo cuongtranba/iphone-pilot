@@ -3,9 +3,16 @@
 Live runs of `bun run probe -- --mode <ocr|iph>` on a real iPhone. Each row is the latest run of that case.
 Cases marked manual in `scripts/probe.ts` (quitting iPhone Mirroring, a locked phone) run only with `--only`.
 
-Environment: MacBook Pro (Apple silicon), macOS 26.5.1, a 1x external display (the mirror window is
-326x720 points, the phone screen inside it 310x674). iPhone 16 Pro (iPhone17,1) over USB, Vietnamese
-Telex hardware-keyboard layout. The probes use only Settings and the Home Screen.
+Environment: MacBook Pro (Apple silicon), macOS 26.5.1. iPhone 16 Pro (iPhone17,1) over USB, with a
+Vietnamese Telex hardware-keyboard layout. The mirror window is 326x720 points and the phone screen
+inside it 310x674; runs were made with it on a 1x display and on a 2x (Retina) display. The probes use
+only Settings and the Home Screen.
+
+The phone ran iOS 26.4.2 at first. iph's touch and typing need iOS 27, so it was updated to iOS 27.2.1
+and every row below was run again on iOS 27.2.1, except "phone unlocked (mirror session ended)", which
+last ran on 26.4.2. The same detection was also seen on 27.2.1, when the mirror showed "Connection
+Interrupted … [Try Again]" and reported `streaming: false`. ocr and iph cannot run at the same moment:
+the mirror needs the phone locked, iph needs it unlocked.
 
 What the OCR runs taught (and what the code now does about it):
 
@@ -17,28 +24,47 @@ What the OCR runs taught (and what the code now does about it):
 - Key events reach the phone through its hardware-keyboard layout (Telex turned "wifi" into "ưifi"),
   so all text is pasted. The clipboard is restored 8 s later: restoring it at once made the next paste
   insert the old contents.
+- Even so, about one paste in ten inserts the phone's previous clipboard item (10 in a row: 9/10;
+  with a 1.2 s or 2.5 s wait before Cmd+V it was no better). `type` therefore checks the screen. If
+  nothing was inserted, it pastes again. If something else was inserted, it undoes it with Cmd+Z and
+  pastes again, but only once the screen is provably back as it was. 20 types in a row then all landed
+  exactly; 3 of them needed a second paste.
+- While the phone is unlocked the window shows Mirroring's own screen ("iPhone in Use … [Connect]"),
+  where a click would press Connect. Input and reads are refused then (`mirror_disconnected`).
+
+What the iph runs taught:
+
+- `iph tap` returns the whole screen it read afterwards; outcomes drop it to stay small.
+- A locked phone is not refused by iph: it reads as its Lock Screen, and input goes to that screen. A
+  tap at a point on a locked phone woke it, and Face ID unlocked it while the phone faced the user.
+  The locked case was therefore run face down. `doctor` reports `screen_unlocked` with "Unlock the phone".
+- `iph doctor`'s own touch self-test failed twice and then passed with nothing changed:
+  - The first time ("the drags were sent but the screen did not move"), Settings was on the Auto-Lock
+    page, which is too short to scroll.
+  - The second time it suggested "Settings → Developer → Enable UI Automation".
+  - The next run passed, and every tap, scroll, swipe and type in the matrix worked.
 
 <!-- probe:ocr:start -->
 ## ocr mode
 
 | case | result | ms | detail | run (UTC) |
 |---|---|---|---|---|
-| doctor reports ready | PASS | 2967 | helper built: ok; accessibility permission: ok; screen recording permission: ok; iPhone Mirroring window: ok; window visible: ok; phone connected: ok | 2026-11-27 06:55 |
-| snapshot of the Home Screen (size vs a PNG screenshot) | PASS | 2039 | 37 elements, 427 ms, 4036 B JSON vs 740837 B PNG (184x smaller) | 2026-11-27 06:55 |
-| tap an app by its name (Settings) opens it | PASS | 3940 | {"ok":true,"outcome":"done","screen_changed":true,"front_restored":"Phone"} | 2026-11-27 06:55 |
-| scroll down then up | PASS | 8876 | down {"ok":true,"outcome":"done","front_restored":"Phone"} moved=true; up {"ok":true,"outcome":"done","front_restored":"Phone"} moved=true | 2026-11-27 06:55 |
-| tap Settings search, type ASCII + Vietnamese, submit | PASS | 17063 | tap {"ok":true,"outcome":"done","screen_changed":true,"front_restored":"Finder"}; "wifi" {"ok":true,"outcome":"done","front_restored":"Finder"}; " Tiếng Việt"+submit {"ok":true,"outcome":"done","front_restored":"Finder"}; on screen: true (No Results for "wifi Tiếng Việt" / Q wifi Tiếng Việt) | 2026-11-27 06:56 |
-| key escape and return (on the Home Screen, where they change nothing) | PASS | 2715 | escape {"ok":true,"outcome":"done","front_restored":"Phone"}; return {"ok":true,"outcome":"done","front_restored":"Phone"} | 2026-11-27 06:55 |
-| home | PASS | 1035 | {"ok":true,"outcome":"done","front_restored":"Phone"} | 2026-11-27 06:55 |
-| tap a stale ref is refused (not_sent), nothing sent | PASS | 8318 | e20=General after going home: {"ok":false,"outcome":"not_sent","code":"stale_ref"} | 2026-11-27 06:55 |
-| tap missing text is refused (not_sent) | PASS | 467 | {"ok":false,"outcome":"not_sent","code":"not_found"} | 2026-11-27 06:55 |
-| screenshot fallback | PASS | 95 | {"ok":true,"outcome":"done"} 733124 B | 2026-11-27 06:55 |
-| swipe left and right (Home Screen pages) | PASS | 5351 | left {"ok":true,"outcome":"done","front_restored":"Phone"} moved=true; right {"ok":true,"outcome":"done","front_restored":"Phone"} back=true | 2026-11-27 06:55 |
-| mirror covered by the front app: input lands only in the mirror, front app restored | PASS | 5072 | front before=Finder after=Finder; {"ok":true,"outcome":"done","screen_changed":true,"front_restored":"Finder"} | 2026-11-27 06:55 |
-| mirror under an always-on-top window: refused (not_sent), front app restored | PASS | 3626 | front before=Finder after=Finder; {"ok":false,"outcome":"not_sent","code":"mirror_covered","front_restored":"Finder"} | 2026-11-27 06:55 |
-| mirror window minimized: refused with a clear message | PASS | 6900 | {"ok":false,"outcome":"not_sent","code":"mirror_hidden"} "un-minimize the iPhone Mirroring window"; doctor: minimized -> un-minimize the iPhone Mirroring window | 2026-11-27 06:55 |
+| doctor reports ready | PASS | 2757 | helper built: ok; accessibility permission: ok; screen recording permission: ok; iPhone Mirroring window: ok; window visible: ok; phone connected: ok | 2026-11-27 07:07 |
+| snapshot of the Home Screen (size vs a PNG screenshot) | PASS | 2046 | 39 elements, 461 ms, 4247 B JSON vs 745701 B PNG (176x smaller) | 2026-11-27 07:07 |
+| tap an app by its name (Settings) opens it | PASS | 3463 | {"ok":true,"outcome":"done","screen_changed":true,"front_restored":"Dia"} | 2026-11-27 07:07 |
+| scroll down then up | PASS | 12263 | down {"ok":true,"outcome":"done","front_restored":"Finder"} moved=true; up {"ok":true,"outcome":"done","front_restored":"Finder"} moved=true | 2026-11-27 07:08 |
+| tap Settings search, type ASCII + Vietnamese, submit | PASS | 16218 | tap {"ok":true,"outcome":"done","screen_changed":true,"front_restored":"Finder"}; "wifi" {"ok":true,"outcome":"done","front_restored":"Finder"}; " Tiếng Việt"+submit {"ok":true,"outcome":"done","front_restored":"Finder"}; on screen: true (No Results for "wifi Tiếng Việt" / Q wifi Tiếng Việt) | 2026-11-27 07:08 |
+| key escape and return (on the Home Screen, where they change nothing) | PASS | 2567 | escape {"ok":true,"outcome":"done","front_restored":"Dia"}; return {"ok":true,"outcome":"done","front_restored":"Dia"} | 2026-11-27 07:07 |
+| home | PASS | 1022 | {"ok":true,"outcome":"done","front_restored":"Dia"} | 2026-11-27 07:07 |
+| tap a stale ref is refused (not_sent), nothing sent | PASS | 8935 | e19=General after going home: {"ok":false,"outcome":"not_sent","code":"stale_ref"} | 2026-11-27 07:08 |
+| tap missing text is refused (not_sent) | PASS | 411 | {"ok":false,"outcome":"not_sent","code":"not_found"} | 2026-11-27 07:07 |
+| screenshot fallback | PASS | 102 | {"ok":true,"outcome":"done"} 751339 B | 2026-11-27 07:07 |
+| swipe left and right (Home Screen pages) | PASS | 4991 | left {"ok":true,"outcome":"done","front_restored":"Dia"} moved=true; right {"ok":true,"outcome":"done","front_restored":"Dia"} back=true | 2026-11-27 07:07 |
+| mirror covered by the front app: input lands only in the mirror, front app restored | PASS | 5122 | front before=Finder after=Finder; {"ok":true,"outcome":"done","screen_changed":true,"front_restored":"Finder"} | 2026-11-27 07:07 |
+| mirror under an always-on-top window: refused (not_sent), front app restored | PASS | 3681 | front before=Finder after=Finder; {"ok":false,"outcome":"not_sent","code":"mirror_covered","front_restored":"Finder"} | 2026-11-27 07:07 |
+| mirror window minimized: refused with a clear message | PASS | 6869 | {"ok":false,"outcome":"not_sent","code":"mirror_hidden"} "un-minimize the iPhone Mirroring window"; doctor: minimized -> un-minimize the iPhone Mirroring window | 2026-11-27 07:07 |
 | phone unlocked (mirror session ended): refused, doctor says how to reconnect | PASS | 376 | {"ok":false,"outcome":"not_sent","code":"mirror_disconnected"}; read refused: mirror_disconnected; doctor: iPhone in Use iPhone Mirroring ended due to iPhone use.  Lock your iPhone to connect. [Connect] -> lock the iPhone, then click Connect in the iPhone Mirroring window | 2026-11-27 06:26 |
-| iPhone Mirroring not running: refused, doctor says how to fix | PASS | 2866 | {"ok":false,"outcome":"not_sent","code":"mirror_not_running"}; read refused: mirror_not_running; doctor: app not running -> open the iPhone Mirroring app on this Mac and connect your iPhone | 2026-11-27 05:46 |
+| iPhone Mirroring not running: refused, doctor says how to fix | PASS | 2886 | {"ok":false,"outcome":"not_sent","code":"mirror_not_running"}; read refused: mirror_not_running; doctor: app not running -> open the iPhone Mirroring app on this Mac and connect your iPhone | 2026-11-27 07:08 |
 <!-- probe:ocr:end -->
 
 <!-- probe:iph:start -->
