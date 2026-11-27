@@ -1,0 +1,23 @@
+{
+  "name": "iphone-pilot",
+  "version": "0.1.0",
+  "description": "Drive a real iPhone from this Mac by text (structured elements), not screenshots: OCR over iPhone Mirroring, or the iOS accessibility tree via iph.",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "iphone-pilot": "src/cli.ts" },
+  "main": "src/index.ts",
+  "scripts": {
+    "build:helper": "mkdir -p bin && swiftc -swift-version 5 -O -o bin/mirror-helper helper/MirrorHelper.swift -framework AppKit -framework CoreGraphics -framework Vision -framework ApplicationServices",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "probe": "bun scripts/probe.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}
